@@ -1,8 +1,8 @@
 ﻿//+------------------------------------------------------------------+
-//|         Boleta_Indice_Com_Painel_v1.57.mq5                       |
+//|         Boleta_Indice_Com_Painel_v1.58.mq5                       |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2026"
-#property version   "1.57"
+#property version   "1.58"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -19,6 +19,7 @@ enum ENUM_RISK_RATIO
 input group "--- Configurações Operacionais ---"
 input int               InpLotSize         = 1;         // Tamanho do Lote (1 Contrato para Mini-índice)
 input ENUM_RISK_RATIO InpRiskRewardRatio = RATIO_2_1;  // Proporção do Gain (Multiplicador do Loss)
+input int               InpMaxNegociosDia  = 3;         // Máximo de Negócios por Dia (Máx de Ordens = Negócios * 2)
 
 input group "--- Configuração do Indicador Volatilidade ---"
 input int               InpATRPeriod       = 14;        // Período do ATR utilizado na fórmula
@@ -51,7 +52,7 @@ int OnInit()
    // Timer super-rápido de 50ms para resposta imediata ao scroll do mouse
    EventSetMillisecondTimer(50);
 
-   for(int i=0; i<9; i++) ObjectDelete(0, PREFIX_TXT+IntegerToString(i));
+   for(int i=0; i<10; i++) ObjectDelete(0, PREFIX_TXT+IntegerToString(i));
 
    Print("==========================================================");
    Print("[SISTEMA PRONTO] Boleta carregada com sucesso no ativo: ", _Symbol);
@@ -69,7 +70,7 @@ void OnDeinit(const int reason)
    Comment("");
    
    ObjectDelete(0, LABEL_PRECO_POSICAO);
-   for(int i=0; i<9; i++) ObjectDelete(0, PREFIX_TXT+IntegerToString(i));
+   for(int i=0; i<10; i++) ObjectDelete(0, PREFIX_TXT+IntegerToString(i));
    Print("[INFO] Robô descarregado do gráfico.");
 }
 
@@ -107,6 +108,17 @@ void OnChartEvent(const int id, const long& lparam, const double& dparam, const 
    if(id == CHARTEVENT_KEYDOWN)
    {
       int tecla = (int)lparam;
+
+      // Verifica se atingiu o limite máximo de ordens do dia (Negócios * 2)
+      int maxOrdensPermitidas = InpMaxNegociosDia * 2;
+      int operacoesFeitasHoje = CalcularOperacoesDoDia();
+
+      if(operacoesFeitasHoje >= maxOrdensPermitidas)
+      {
+         globalMensagemStatus = "Limite de ordens atingido! Já deu por hoje.";
+         ApagarLinhasProjecao();
+         return;
+      }
 
       if(tecla == 67 || tecla == 99) // Tecla 'C'
       {
@@ -174,6 +186,14 @@ double CalcularPontosSL()
 
 void EnviarOrdemMercado()
 {
+   int maxOrdensPermitidas = InpMaxNegociosDia * 2;
+   if(CalcularOperacoesDoDia() >= maxOrdensPermitidas)
+   {
+      globalMensagemStatus = "Limite de ordens atingido! Já deu por hoje.";
+      ApagarLinhasProjecao();
+      return;
+   }
+
    double pontosSL = CalcularPontosSL();
    double pontosTP = ArredondarParaPassoDoPreco(pontosSL * (double)InpRiskRewardRatio);
 
@@ -599,43 +619,35 @@ void CriarTextoLabelGrafico(string nome, string texto, int x, int y, int tamanho
 
 ENUM_BASE_CORNER ObterMelhorCantoPainel()
 {
-   // 1. Obtém o limite do preço no topo e fundo visíveis no momento
    double precoMaximoVisivel = ChartGetDouble(ChartID(), CHART_PRICE_MAX);
    double precoMinimoVisivel = ChartGetDouble(ChartID(), CHART_PRICE_MIN);
    
    if(precoMaximoVisivel <= precoMinimoVisivel) return CORNER_RIGHT_UPPER;
 
-   // 2. Calcula a faixa do topo (os últimos 30% superiores da tela do gráfico)
    double amplitude = precoMaximoVisivel - precoMinimoVisivel;
    double linhaCorteTopo = precoMaximoVisivel - (amplitude * 0.30);
 
-   // 3. Lê as barras visíveis atuais
-   int primeiroCandleVisivel = (int)ChartGetInteger(ChartID(), CHART_FIRST_VISIBLE_BAR);
-   int totalVisiveis         = (int)ChartGetInteger(ChartID(), CHART_VISIBLE_BARS);
-   
+   int totalVisiveis = (int)ChartGetInteger(ChartID(), CHART_VISIBLE_BARS);
    if(totalVisiveis <= 0) return CORNER_RIGHT_UPPER;
 
-   // Foca o teste nos candles mais à direita (últimos 35% dos candles visíveis na tela)
    int limiteAvaliacao = (int)MathMax(1, totalVisiveis * 0.35);
 
    MqlRates rates[];
    ArraySetAsSeries(rates, true);
    
-   // Copia os candles do trecho direito da tela
    int copied = CopyRates(_Symbol, _Period, 0, limiteAvaliacao, rates);
    if(copied > 0)
    {
       for(int i = 0; i < copied; i++)
       {
-         // Se a MÁXIMA de qualquer um dos candles da direita entrar na faixa de topo
          if(rates[i].high >= linhaCorteTopo)
          {
-            return CORNER_RIGHT_LOWER; // Move instantaneamente para baixo
+            return CORNER_RIGHT_LOWER; 
          }
       }
    }
    
-   return CORNER_RIGHT_UPPER; // Mantém no topo se a região superior estiver livre
+   return CORNER_RIGHT_UPPER; 
 }
 
 void AtualizarPainelVisualEmTempoReal()
@@ -649,10 +661,31 @@ void AtualizarPainelVisualEmTempoReal()
    string textoPnLPainel = StringFormat("Posição (0 %s)", _Symbol);
    color corPnL = clrSilver;
 
+   // Validação de limite diário para atualizar a mensagem visual de status
+   int maxOrdensPermitidas = InpMaxNegociosDia * 2;
+   int operacoesFeitasHoje = CalcularOperacoesDoDia();
+   color corStatus = clrDarkSlateGray;
+
+   if(operacoesFeitasHoje >= maxOrdensPermitidas)
+   {
+      globalMensagemStatus = "          >>>>>>>>> Já deu por hoje <<<<<<<<";
+      corStatus = clrRed;
+      ApagarLinhasProjecao();
+   }
+   else
+   {
+      // Se o limite aumentou e estava bloqueado, restaura o estado padrão inicial caso não haja posição aberta
+      if(globalMensagemStatus == "Já deu por hoje" && !PositionSelect(_Symbol))
+      {
+         globalMensagemStatus = "(C) Compra | (V) Venda | (Enter) Envia | (CTRL+Enter) Zera";
+      }
+   }
+
    if(PositionSelect(_Symbol))
    {
       posicaoEstavaAberta = true; 
-      globalMensagemStatus = "Ordem executada! (CTRL + Enter) para Zerar";
+      if(operacoesFeitasHoje < maxOrdensPermitidas)
+         globalMensagemStatus = "Ordem executada! (CTRL + Enter) para Zerar";
 
       long tipoPos = PositionGetInteger(POSITION_TYPE);
       double precoAberturaPos = PositionGetDouble(POSITION_PRICE_OPEN);
@@ -688,7 +721,8 @@ void AtualizarPainelVisualEmTempoReal()
       if(posicaoEstavaAberta)
       {
          VerificarResultadoETocarSomSaida();
-         globalMensagemStatus = "(C) Compra | (V) Venda | (Enter) Envia | (CTRL+Enter) Zera";
+         if(operacoesFeitasHoje < maxOrdensPermitidas)
+            globalMensagemStatus = "(C) Compra | (V) Venda | (Enter) Envia | (CTRL+Enter) Zera";
          posicaoEstavaAberta = false;
       }
 
@@ -698,7 +732,6 @@ void AtualizarPainelVisualEmTempoReal()
    // Métricas do Dia
    double totalDoDia = CalcularResultadoFinanceiroDoDia();
    double totalPontosDia = CalcularPontosDoDia();
-   int totalOperacoesDia = CalcularOperacoesDoDia();
    
    string strTotalDia = DoubleToString(totalDoDia, 2);
    StringReplace(strTotalDia, ".", ",");
@@ -706,7 +739,7 @@ void AtualizarPainelVisualEmTempoReal()
    string strPontosDia = DoubleToString(totalPontosDia, 0);
    StringReplace(strPontosDia, ".", ",");
 
-   string textoTotalDia = StringFormat("PnL Diário: R$ %s | %s Pontos | Operações: %d", strTotalDia, strPontosDia, totalOperacoesDia);
+   string textoTotalDia = StringFormat("PnL Diário: R$ %s | %s Pontos | Operações: %d/%d", strTotalDia, strPontosDia, operacoesFeitasHoje, maxOrdensPermitidas);
    
    color corTotalDia = clrSilver;
    if(totalDoDia > 0.0)
@@ -742,11 +775,11 @@ void AtualizarPainelVisualEmTempoReal()
       CriarTextoLabel(PREFIX_TXT+"4", "Alvos (" + IntegerToString(InpRiskRewardRatio) + ":1): SL = " + DoubleToString(exSL, 2) + " pts | TP = " + DoubleToString(exTP, 2) + " pts", margemDireita, 73, 9, clrSteelBlue, cantoPainel);
       CriarTextoLabel(PREFIX_TXT+"7", textoTotalMes, margemDireita, 58, 9, corTotalMes, cantoPainel);
       CriarTextoLabel(PREFIX_TXT+"6", textoTotalDia, margemDireita, 43, 9, corTotalDia, cantoPainel);
-      CriarTextoLabel(PREFIX_TXT+"5", globalMensagemStatus, margemDireita, 28, 9, clrDarkSlateGray, cantoPainel);
+      CriarTextoLabel(PREFIX_TXT+"5", globalMensagemStatus, margemDireita, 28, 9, corStatus, cantoPainel);
    }
    else
    {
-      CriarTextoLabel(PREFIX_TXT+"5", globalMensagemStatus, margemDireita, 20, 9, clrDarkSlateGray, cantoPainel);
+      CriarTextoLabel(PREFIX_TXT+"5", globalMensagemStatus, margemDireita, 20, 9, corStatus, cantoPainel);
       CriarTextoLabel(PREFIX_TXT+"6", textoTotalDia, margemDireita, 35, 9, corTotalDia, cantoPainel);
       CriarTextoLabel(PREFIX_TXT+"7", textoTotalMes, margemDireita, 50, 9, corTotalMes, cantoPainel);
       CriarTextoLabel(PREFIX_TXT+"2", "Maior candle do dia: " + DoubleToString(maiorAmplitudeGlobal, 0) + " pontos | Horário: " + horarioMaiorCandle, margemDireita, 65, 9, clrOrangeRed, cantoPainel); 
@@ -774,8 +807,6 @@ void CriarTextoLabel(string nome, string texto, int x, int y, int tamanhoFonte, 
    ObjectSetInteger(0, nome, OBJPROP_FONTSIZE, tamanhoFonte);
    ObjectSetInteger(0, nome, OBJPROP_COLOR, cor);
    ObjectSetString(0, nome, OBJPROP_FONT, "Arial Black");
-   
-   // Mantém o texto atrás dos candles
    ObjectSetInteger(0, nome, OBJPROP_BACK, true);
 }
 
