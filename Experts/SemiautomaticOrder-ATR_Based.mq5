@@ -1,8 +1,8 @@
 ﻿//+------------------------------------------------------------------+
-//|         Boleta_Indice_Com_Painel_v1.57.mq5                       |
+//|          Boleta_Indice_Com_Painel_v1.52.mq5 |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2026"
-#property version   "1.57"
+#property version   "1.52"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -21,7 +21,7 @@ input int               InpLotSize         = 1;         // Tamanho do Lote (1 Co
 input ENUM_RISK_RATIO InpRiskRewardRatio = RATIO_2_1;  // Proporção do Gain (Multiplicador do Loss)
 
 input group "--- Configuração do Indicador Volatilidade ---"
-input int               InpATRPeriod       = 14;        // Período do ATR utilizado na fórmula
+input int               InpATRPeriod       = 14;         // Período do ATR utilizado na fórmula
 
 const string PREFIX_OBJ = "Proj_";
 const string PREFIX_TXT = "Painel_";
@@ -48,16 +48,19 @@ int OnInit()
       return(INIT_FAILED);
    }
 
-   // Timer super-rápido de 50ms para resposta imediata ao scroll do mouse
-   EventSetMillisecondTimer(50);
+   EventSetTimer(1);
 
-   for(int i=0; i<9; i++) ObjectDelete(0, PREFIX_TXT+IntegerToString(i));
+   for(int i=0; i<8; i++) ObjectDelete(0, PREFIX_TXT+IntegerToString(i));
 
    Print("==========================================================");
    Print("[SISTEMA PRONTO] Boleta carregada com sucesso no ativo: ", _Symbol);
+   Print("[INSTRUÇÃO] Pressione [C] Compra | [V] Venda | [ENTER] Envia");
+   Print("[INSTRUÇÃO] Pressione [CTRL + ENTER] para ZERAR/ENCERRAR posição aberta.");
+   Print("[INSTRUÇÃO] Pressione [ESC] a qualquer momento para CANCELAR.");
    Print("==========================================================");
 
    ChartRedraw(0);
+   
    return(INIT_SUCCEEDED);
 }
 
@@ -69,7 +72,7 @@ void OnDeinit(const int reason)
    Comment("");
    
    ObjectDelete(0, LABEL_PRECO_POSICAO);
-   for(int i=0; i<9; i++) ObjectDelete(0, PREFIX_TXT+IntegerToString(i));
+   for(int i=0; i<8; i++) ObjectDelete(0, PREFIX_TXT+IntegerToString(i));
    Print("[INFO] Robô descarregado do gráfico.");
 }
 
@@ -97,11 +100,9 @@ void ProcessarRotinasDeAtualizacao()
 
 void OnChartEvent(const int id, const long& lparam, const double& dparam, const string& sparam)
 {
-   // Captura instantaneamente scroll, drag e zoom do mouse no gráfico
    if(id == CHARTEVENT_CHART_CHANGE)
    {
       AtualizarLabelGraficoPreco("", clrNONE, false);
-      ProcessarRotinasDeAtualizacao(); 
    }
    
    if(id == CHARTEVENT_KEYDOWN)
@@ -113,14 +114,14 @@ void OnChartEvent(const int id, const long& lparam, const double& dparam, const 
          operacaoPendente = true;
          tipoOperacao = 1;
          AtualizarLinhasCustomizadas();
-         globalMensagemStatus = "Modo compra ativo! (ENTER) Envia | (ESC) Cancela";
+         globalMensagemStatus = "MODO COMPRA ATIVO! (ENTER) Envia | (ESC) Cancela";
       }
       else if(tecla == 86 || tecla == 118) // Tecla 'V'
       {
          operacaoPendente = true;
          tipoOperacao = 2;
          AtualizarLinhasCustomizadas();
-         globalMensagemStatus = "Modo venda ativo! (ENTER) Envia | (ESC) Cancela";
+         globalMensagemStatus = "MODO VENDA ATIVO! (ENTER) Envia | (ESC) Cancela";
       }
       else if(tecla == 13) // Tecla 'ENTER'
       {
@@ -140,7 +141,7 @@ void OnChartEvent(const int id, const long& lparam, const double& dparam, const 
       else if(tecla == 27) // Tecla 'ESC'
       {
          ApagarLinhasProjecao();
-         globalMensagemStatus = "Cancelado. Pressione (C) Compra | (V) Venda";
+         globalMensagemStatus = "CANCELADO. Pressione (C) Compra | (V) Venda";
       }
    }
 }
@@ -193,48 +194,7 @@ void EnviarOrdemMercado()
    }
 
    ApagarLinhasProjecao();
-   globalMensagemStatus = "Ordem enviada! Pressione (ESC) para cancelar a ordem";
-}
-
-void VerificarResultadoETocarSomSaida()
-{
-   datetime inicioDoDia = iTime(_Symbol, PERIOD_D1, 0);
-   HistorySelect(inicioDoDia, TimeCurrent());
-   int totalDeals = HistoryDealsTotal();
-
-   double ultimoLucro = 0.0;
-   bool encontrouDealSaida = false;
-
-   for(int i = totalDeals - 1; i >= 0; i--)
-   {
-      ulong ticketDeal = HistoryDealGetTicket(i);
-      if(ticketDeal > 0)
-      {
-         if(HistoryDealGetString(ticketDeal, DEAL_SYMBOL) == _Symbol)
-         {
-            long entradaDeal = HistoryDealGetInteger(ticketDeal, DEAL_ENTRY);
-            if(entradaDeal == DEAL_ENTRY_OUT || entradaDeal == DEAL_ENTRY_INOUT)
-            {
-               double lucro    = HistoryDealGetDouble(ticketDeal, DEAL_PROFIT);
-               double swap     = HistoryDealGetDouble(ticketDeal, DEAL_SWAP);
-               double comissao = HistoryDealGetDouble(ticketDeal, DEAL_COMMISSION);
-               
-               ultimoLucro = lucro + swap + comissao;
-               encontrouDealSaida = true;
-               break;
-            }
-         }
-      }
-   }
-
-   if(encontrouDealSaida && ultimoLucro > 0.0)
-   {
-      PlaySound("\\Audio\\gain.wav");
-   }
-   else
-   {
-      PlaySound("stops.wav");
-   }
+   globalMensagemStatus = "ORDEM ENVIADA! Pressione (ESC) para cancelar a ordem";
 }
 
 void FecharPosicaoAberta()
@@ -243,14 +203,14 @@ void FecharPosicaoAberta()
    {
       if(trade.PositionClose(_Symbol))
       {
-         VerificarResultadoETocarSomSaida();
+         PlaySound("ok.wav");
          globalMensagemStatus = "(C) Compra | (V) Venda | (Enter) Envia | (CTRL+Enter) Zera";
          posicaoEstavaAberta = false;
       }
    }
    else
    {
-      globalMensagemStatus = "Nenhuma posição aberta";
+      globalMensagemStatus = "NENHUMA POSIÇÃO ABERTA";
    }
 }
 
@@ -304,8 +264,8 @@ double CalcularResultadoFinanceiroDoDia()
          string ativoDeal = HistoryDealGetString(ticketDeal, DEAL_SYMBOL);
          if(ativoDeal == _Symbol)
          {
-            double lucroDeal    = HistoryDealGetDouble(ticketDeal, DEAL_PROFIT);
-            double swapDeal     = HistoryDealGetDouble(ticketDeal, DEAL_SWAP);
+            double lucroDeal = HistoryDealGetDouble(ticketDeal, DEAL_PROFIT);
+            double swapDeal  = HistoryDealGetDouble(ticketDeal, DEAL_SWAP);
             double comissaoDeal = HistoryDealGetDouble(ticketDeal, DEAL_COMMISSION);
             
             lucroTotalDia += (lucroDeal + swapDeal + comissaoDeal);
@@ -345,8 +305,8 @@ double CalcularPontosDoDia()
                      if(HistoryDealGetInteger(ticketIn, DEAL_ENTRY) == DEAL_ENTRY_IN)
                      {
                         double precoEntrada = HistoryDealGetDouble(ticketIn, DEAL_PRICE);
-                        double precoSaida   = HistoryDealGetDouble(ticketDeal, DEAL_PRICE);
-                        long tipoEntrada    = HistoryDealGetInteger(ticketIn, DEAL_TYPE);
+                        double precoSaida = HistoryDealGetDouble(ticketDeal, DEAL_PRICE);
+                        long tipoEntrada = HistoryDealGetInteger(ticketIn, DEAL_TYPE);
                         
                         if(tipoEntrada == DEAL_TYPE_BUY)
                            totalPontos += (precoSaida - precoEntrada) / _Point;
@@ -363,151 +323,6 @@ double CalcularPontosDoDia()
    }
 
    return totalPontos;
-}
-
-int CalcularOperacoesDoDia()
-{
-   datetime inicioDoDia = iTime(_Symbol, PERIOD_D1, 0);
-   int totalOps = 0;
-
-   HistorySelect(inicioDoDia, TimeCurrent());
-   int totalDeals = HistoryDealsTotal();
-
-   for(int i = 0; i < totalDeals; i++)
-   {
-      ulong ticketDeal = HistoryDealGetTicket(i);
-      if(ticketDeal > 0)
-      {
-         string ativoDeal = HistoryDealGetString(ticketDeal, DEAL_SYMBOL);
-         if(ativoDeal == _Symbol)
-         {
-            long entradaDeal = HistoryDealGetInteger(ticketDeal, DEAL_ENTRY);
-            if(entradaDeal == DEAL_ENTRY_OUT || entradaDeal == DEAL_ENTRY_INOUT)
-            {
-               totalOps++;
-            }
-         }
-      }
-   }
-
-   return totalOps;
-}
-
-//--- Métricas do Mês ---
-datetime ObterInicioDoMes()
-{
-   MqlDateTime dt;
-   TimeCurrent(dt);
-   dt.day = 1;
-   dt.hour = 0;
-   dt.min = 0;
-   dt.sec = 0;
-   return StructToTime(dt);
-}
-
-double CalcularResultadoFinanceiroDoMes()
-{
-   datetime inicioDoMes = ObterInicioDoMes();
-   double lucroTotalMes = 0.0;
-
-   HistorySelect(inicioDoMes, TimeCurrent());
-   int totalDeals = HistoryDealsTotal();
-
-   for(int i = 0; i < totalDeals; i++)
-   {
-      ulong ticketDeal = HistoryDealGetTicket(i);
-      if(ticketDeal > 0)
-      {
-         string ativoDeal = HistoryDealGetString(ticketDeal, DEAL_SYMBOL);
-         if(ativoDeal == _Symbol)
-         {
-            double lucroDeal    = HistoryDealGetDouble(ticketDeal, DEAL_PROFIT);
-            double swapDeal     = HistoryDealGetDouble(ticketDeal, DEAL_SWAP);
-            double comissaoDeal = HistoryDealGetDouble(ticketDeal, DEAL_COMMISSION);
-            
-            lucroTotalMes += (lucroDeal + swapDeal + comissaoDeal);
-         }
-      }
-   }
-
-   return lucroTotalMes;
-}
-
-double CalcularPontosDoMes()
-{
-   datetime inicioDoMes = ObterInicioDoMes();
-   double totalPontosMes = 0.0;
-
-   HistorySelect(inicioDoMes, TimeCurrent());
-   int totalDeals = HistoryDealsTotal();
-
-   for(int i = 0; i < totalDeals; i++)
-   {
-      ulong ticketDeal = HistoryDealGetTicket(i);
-      if(ticketDeal > 0)
-      {
-         string ativoDeal = HistoryDealGetString(ticketDeal, DEAL_SYMBOL);
-         if(ativoDeal == _Symbol)
-         {
-            long entradaDeal = HistoryDealGetInteger(ticketDeal, DEAL_ENTRY);
-            ulong positionID = HistoryDealGetInteger(ticketDeal, DEAL_POSITION_ID);
-            
-            if(entradaDeal == DEAL_ENTRY_OUT || entradaDeal == DEAL_ENTRY_INOUT)
-            {
-               for(int j = 0; j < totalDeals; j++)
-               {
-                  ulong ticketIn = HistoryDealGetTicket(j);
-                  if(ticketIn > 0 && HistoryDealGetInteger(ticketIn, DEAL_POSITION_ID) == positionID)
-                  {
-                     if(HistoryDealGetInteger(ticketIn, DEAL_ENTRY) == DEAL_ENTRY_IN)
-                     {
-                        double precoEntrada = HistoryDealGetDouble(ticketIn, DEAL_PRICE);
-                        double precoSaida   = HistoryDealGetDouble(ticketDeal, DEAL_PRICE);
-                        long tipoEntrada    = HistoryDealGetInteger(ticketIn, DEAL_TYPE);
-                        
-                        if(tipoEntrada == DEAL_TYPE_BUY)
-                           totalPontosMes += (precoSaida - precoEntrada) / _Point;
-                        else if(tipoEntrada == DEAL_TYPE_SELL)
-                           totalPontosMes += (precoEntrada - precoSaida) / _Point;
-                        
-                        break;
-                     }
-                  }
-               }
-            }
-         }
-      }
-   }
-
-   return totalPontosMes;
-}
-
-int CalcularOperacoesDoMes()
-{
-   datetime inicioDoMes = ObterInicioDoMes();
-   int totalOpsMes = 0;
-
-   HistorySelect(inicioDoMes, TimeCurrent());
-   int totalDeals = HistoryDealsTotal();
-
-   for(int i = 0; i < totalDeals; i++)
-   {
-      ulong ticketDeal = HistoryDealGetTicket(i);
-      if(ticketDeal > 0)
-      {
-         string ativoDeal = HistoryDealGetString(ticketDeal, DEAL_SYMBOL);
-         if(ativoDeal == _Symbol)
-         {
-            long entradaDeal = HistoryDealGetInteger(ticketDeal, DEAL_ENTRY);
-            if(entradaDeal == DEAL_ENTRY_OUT || entradaDeal == DEAL_ENTRY_INOUT)
-            {
-               totalOpsMes++;
-            }
-         }
-      }
-   }
-
-   return totalOpsMes;
 }
 
 void DefaultAtualizarLinhasCustomizadas()
@@ -543,7 +358,7 @@ void DefaultAtualizarLinhasCustomizadas()
    ChartRedraw(0);
 }
 
-void AtualizarLinhasCustomizadas() { DefaultAtualizarLinhasCustomizadas(); }
+void  AtualizarLinhasCustomizadas() { DefaultAtualizarLinhasCustomizadas(); }
 
 void AtualizarLabelGraficoPreco(string texto = "", color cor = clrNONE, bool atualizarTexto = false)
 {
@@ -599,60 +414,52 @@ void CriarTextoLabelGrafico(string nome, string texto, int x, int y, int tamanho
 
 ENUM_BASE_CORNER ObterMelhorCantoPainel()
 {
-   // 1. Obtém o limite do preço no topo e fundo visíveis no momento
-   double precoMaximoVisivel = ChartGetDouble(ChartID(), CHART_PRICE_MAX);
-   double precoMinimoVisivel = ChartGetDouble(ChartID(), CHART_PRICE_MIN);
+   int larguraPainel = 480;
+   int alturaPainel = 130; 
    
-   if(precoMaximoVisivel <= precoMinimoVisivel) return CORNER_RIGHT_UPPER;
-
-   // 2. Calcula a faixa do topo (os últimos 30% superiores da tela do gráfico)
-   double amplitude = precoMaximoVisivel - precoMinimoVisivel;
-   double linhaCorteTopo = precoMaximoVisivel - (amplitude * 0.30);
-
-   // 3. Lê as barras visíveis atuais
-   int primeiroCandleVisivel = (int)ChartGetInteger(ChartID(), CHART_FIRST_VISIBLE_BAR);
-   int totalVisiveis         = (int)ChartGetInteger(ChartID(), CHART_VISIBLE_BARS);
+   long larguraGrafico = ChartGetInteger(ChartID(), CHART_WIDTH_IN_PIXELS);
    
-   if(totalVisiveis <= 0) return CORNER_RIGHT_UPPER;
-
-   // Foca o teste nos candles mais à direita (últimos 35% dos candles visíveis na tela)
-   int limiteAvaliacao = (int)MathMax(1, totalVisiveis * 0.35);
+   int xMinPainel = (int)(larguraGrafico - larguraPainel - 20);
+   int xMaxPainel = (int)(larguraGrafico - 10);
+   int yMinPainel = 10;
+   int yMaxPainel = yMinPainel + alturaPainel;
 
    MqlRates rates[];
    ArraySetAsSeries(rates, true);
-   
-   // Copia os candles do trecho direito da tela
-   int copied = CopyRates(_Symbol, _Period, 0, limiteAvaliacao, rates);
-   if(copied > 0)
+   int visiveis = (int)ChartGetInteger(ChartID(), CHART_VISIBLE_BARS);
+   if(CopyRates(_Symbol, _Period, 0, visiveis, rates) > 0)
    {
-      for(int i = 0; i < copied; i++)
+      for(int i = 0; i < ArraySize(rates); i++)
       {
-         // Se a MÁXIMA de qualquer um dos candles da direita entrar na faixa de topo
-         if(rates[i].high >= linhaCorteTopo)
+         int xCandle = 0, yCandle = 0;
+         if(ChartTimePriceToXY(ChartID(), 0, rates[i].time, rates[i].high, xCandle, yCandle))
          {
-            return CORNER_RIGHT_LOWER; // Move instantaneamente para baixo
+            if(xCandle >= xMinPainel && xCandle <= xMaxPainel && yCandle >= yMinPainel && yCandle <= yMaxPainel)
+            {
+               return CORNER_RIGHT_LOWER; 
+            }
          }
       }
    }
    
-   return CORNER_RIGHT_UPPER; // Mantém no topo se a região superior estiver livre
+   return CORNER_RIGHT_UPPER;
 }
 
 void AtualizarPainelVisualEmTempoReal()
 {
    double exSL = CalcularPontosSL();
    double exTP = ArredondarParaPassoDoPreco(exSL * (double)InpRiskRewardRatio);
-   int margemDireita = 400;  
+   int margemDireita = 480;  
    
    ENUM_BASE_CORNER cantoPainel = ObterMelhorCantoPainel();
 
-   string textoPnLPainel = StringFormat("Posição (0 %s)", _Symbol);
+   string textoPnLPainel = StringFormat("POSIÇÃO (0 %s)", _Symbol);
    color corPnL = clrSilver;
 
    if(PositionSelect(_Symbol))
    {
       posicaoEstavaAberta = true; 
-      globalMensagemStatus = "Ordem executada! (CTRL + Enter) para Zerar";
+      globalMensagemStatus = "ORDEM EXECUTADA! Pressione (CTRL + Enter) para Zerar";
 
       long tipoPos = PositionGetInteger(POSITION_TYPE);
       double precoAberturaPos = PositionGetDouble(POSITION_PRICE_OPEN);
@@ -665,13 +472,14 @@ void AtualizarPainelVisualEmTempoReal()
       else
          diffPontos = (precoAberturaPos - precoAtual) / _Point;
 
-      string tipoStr = (tipoPos == POSITION_TYPE_BUY) ? "Compra" : "Venda";
+      string tipoStr = (tipoPos == POSITION_TYPE_BUY) ? "COMPRA" : "VENDA";
       int volumePos = (int)PositionGetDouble(POSITION_VOLUME);
       
       string valorFormatado = DoubleToString(lucroFinanceiro, 2);
       StringReplace(valorFormatado, ".", ",");
       
-      textoPnLPainel = StringFormat("(%s: %d %s) | PnL: R$ %s | %.0f pontos", tipoStr, volumePos, _Symbol, valorFormatado, diffPontos);
+      // Combinado em uma única linha com o formato solicitado
+      textoPnLPainel = StringFormat("(%s: %d %s) | Lucro: R$ %s | %.0f pontos", tipoStr, volumePos, _Symbol, valorFormatado, diffPontos);
       
       if(lucroFinanceiro > 0.0)
          corPnL = clrLimeGreen;
@@ -687,7 +495,7 @@ void AtualizarPainelVisualEmTempoReal()
    {
       if(posicaoEstavaAberta)
       {
-         VerificarResultadoETocarSomSaida();
+         PlaySound("ok.wav");
          globalMensagemStatus = "(C) Compra | (V) Venda | (Enter) Envia | (CTRL+Enter) Zera";
          posicaoEstavaAberta = false;
       }
@@ -695,10 +503,8 @@ void AtualizarPainelVisualEmTempoReal()
       ObjectDelete(0, LABEL_PRECO_POSICAO);
    }
 
-   // Métricas do Dia
    double totalDoDia = CalcularResultadoFinanceiroDoDia();
    double totalPontosDia = CalcularPontosDoDia();
-   int totalOperacoesDia = CalcularOperacoesDoDia();
    
    string strTotalDia = DoubleToString(totalDoDia, 2);
    StringReplace(strTotalDia, ".", ",");
@@ -706,7 +512,7 @@ void AtualizarPainelVisualEmTempoReal()
    string strPontosDia = DoubleToString(totalPontosDia, 0);
    StringReplace(strPontosDia, ".", ",");
 
-   string textoTotalDia = StringFormat("PnL Diário: R$ %s | %s Pontos | Operações: %d", strTotalDia, strPontosDia, totalOperacoesDia);
+   string textoTotalDia = StringFormat("TOTAL DO DIA: R$ %s | %s Pontos", strTotalDia, strPontosDia);
    
    color corTotalDia = clrSilver;
    if(totalDoDia > 0.0)
@@ -714,33 +520,13 @@ void AtualizarPainelVisualEmTempoReal()
    else if(totalDoDia < 0.0)
       corTotalDia = clrRed;
 
-   // Métricas do Mês
-   double totalDoMes = CalcularResultadoFinanceiroDoMes();
-   double totalPontosMes = CalcularPontosDoMes();
-   int totalOperacoesMes = CalcularOperacoesDoMes();
-
-   string strTotalMes = DoubleToString(totalDoMes, 2);
-   StringReplace(strTotalMes, ".", ",");
-
-   string strPontosMes = DoubleToString(totalPontosMes, 0);
-   StringReplace(strPontosMes, ".", ",");
-
-   string textoTotalMes = StringFormat("PnL Mensal: R$ %s | %s Pontos | Operações: %d", strTotalMes, strPontosMes, totalOperacoesMes);
-
-   color corTotalMes = clrSilver;
-   if(totalDoMes > 0.0)
-      corTotalMes = clrLimeGreen;
-   else if(totalDoMes < 0.0)
-      corTotalMes = clrRed;
-
    if(cantoPainel == CORNER_RIGHT_LOWER)
    {
-      CriarTextoLabel(PREFIX_TXT+"0", textoPnLPainel, margemDireita, 130, 9, corPnL, cantoPainel);
-      CriarTextoLabel(PREFIX_TXT+"1", "-----------------------------------------------------------------------------------------", margemDireita, 117, 9, clrSilver, cantoPainel);
-      CriarTextoLabel(PREFIX_TXT+"2", "Maior candle do dia: " + DoubleToString(maiorAmplitudeGlobal, 0) + " pontos | Horário: " + horarioMaiorCandle, margemDireita, 103, 9, clrOrangeRed, cantoPainel); 
-      CriarTextoLabel(PREFIX_TXT+"3", "Total de candles do dia: " + IntegerToString(totalCandlesDoDia), margemDireita, 88, 9, clrSteelBlue, cantoPainel);
-      CriarTextoLabel(PREFIX_TXT+"4", "Alvos (" + IntegerToString(InpRiskRewardRatio) + ":1): SL = " + DoubleToString(exSL, 2) + " pts | TP = " + DoubleToString(exTP, 2) + " pts", margemDireita, 73, 9, clrSteelBlue, cantoPainel);
-      CriarTextoLabel(PREFIX_TXT+"7", textoTotalMes, margemDireita, 58, 9, corTotalMes, cantoPainel);
+      CriarTextoLabel(PREFIX_TXT+"0", textoPnLPainel, margemDireita, 115, 9, corPnL, cantoPainel);
+      CriarTextoLabel(PREFIX_TXT+"1", "-----------------------------------------------------------------------------------------", margemDireita, 102, 9, clrSilver, cantoPainel);
+      CriarTextoLabel(PREFIX_TXT+"2", "MAIOR CANDLE DO DIA: " + DoubleToString(maiorAmplitudeGlobal, 0) + " PONTOS | HORÁRIO: " + horarioMaiorCandle, margemDireita, 88, 9, clrOrangeRed, cantoPainel); 
+      CriarTextoLabel(PREFIX_TXT+"3", "TOTAL DE CANDLES DO DIA: " + IntegerToString(totalCandlesDoDia), margemDireita, 73, 9, clrSteelBlue, cantoPainel);
+      CriarTextoLabel(PREFIX_TXT+"4", "ALVOS (" + IntegerToString(InpRiskRewardRatio) + ":1): SL = " + DoubleToString(exSL, 2) + " pts | TP = " + DoubleToString(exTP, 2) + " pts", margemDireita, 58, 9, clrSteelBlue, cantoPainel);
       CriarTextoLabel(PREFIX_TXT+"6", textoTotalDia, margemDireita, 43, 9, corTotalDia, cantoPainel);
       CriarTextoLabel(PREFIX_TXT+"5", globalMensagemStatus, margemDireita, 28, 9, clrDarkSlateGray, cantoPainel);
    }
@@ -748,12 +534,11 @@ void AtualizarPainelVisualEmTempoReal()
    {
       CriarTextoLabel(PREFIX_TXT+"5", globalMensagemStatus, margemDireita, 20, 9, clrDarkSlateGray, cantoPainel);
       CriarTextoLabel(PREFIX_TXT+"6", textoTotalDia, margemDireita, 35, 9, corTotalDia, cantoPainel);
-      CriarTextoLabel(PREFIX_TXT+"7", textoTotalMes, margemDireita, 50, 9, corTotalMes, cantoPainel);
-      CriarTextoLabel(PREFIX_TXT+"2", "Maior candle do dia: " + DoubleToString(maiorAmplitudeGlobal, 0) + " pontos | Horário: " + horarioMaiorCandle, margemDireita, 65, 9, clrOrangeRed, cantoPainel); 
-      CriarTextoLabel(PREFIX_TXT+"3", "Total de candles do dia: " + IntegerToString(totalCandlesDoDia), margemDireita, 80, 9, clrSteelBlue, cantoPainel);
-      CriarTextoLabel(PREFIX_TXT+"4", "Alvos (" + IntegerToString(InpRiskRewardRatio) + ":1): SL = " + DoubleToString(exSL, 2) + " pts | TP = " + DoubleToString(exTP, 2) + " pts", margemDireita, 95, 9, clrSteelBlue, cantoPainel);
-      CriarTextoLabel(PREFIX_TXT+"1", "-----------------------------------------------------------------------------------------", margemDireita, 108, 9, clrSilver, cantoPainel);
-      CriarTextoLabel(PREFIX_TXT+"0", textoPnLPainel, margemDireita, 121, 9, corPnL, cantoPainel);
+      CriarTextoLabel(PREFIX_TXT+"2", "MAIOR CANDLE DO DIA: " + DoubleToString(maiorAmplitudeGlobal, 0) + " PONTOS | HORÁRIO: " + horarioMaiorCandle, margemDireita, 50, 9, clrOrangeRed, cantoPainel); 
+      CriarTextoLabel(PREFIX_TXT+"3", "TOTAL DE CANDLES DO DIA: " + IntegerToString(totalCandlesDoDia), margemDireita, 65, 9, clrSteelBlue, cantoPainel);
+      CriarTextoLabel(PREFIX_TXT+"4", "ALVOS (" + IntegerToString(InpRiskRewardRatio) + ":1): SL = " + DoubleToString(exSL, 2) + " pts | TP = " + DoubleToString(exTP, 2) + " pts", margemDireita, 80, 9, clrSteelBlue, cantoPainel);
+      CriarTextoLabel(PREFIX_TXT+"1", "-----------------------------------------------------------------------------------------", margemDireita, 93, 9, clrSilver, cantoPainel);
+      CriarTextoLabel(PREFIX_TXT+"0", textoPnLPainel, margemDireita, 106, 9, corPnL, cantoPainel);
    }
    
    ChartRedraw(0);
@@ -774,9 +559,6 @@ void CriarTextoLabel(string nome, string texto, int x, int y, int tamanhoFonte, 
    ObjectSetInteger(0, nome, OBJPROP_FONTSIZE, tamanhoFonte);
    ObjectSetInteger(0, nome, OBJPROP_COLOR, cor);
    ObjectSetString(0, nome, OBJPROP_FONT, "Arial Black");
-   
-   // Mantém o texto atrás dos candles
-   ObjectSetInteger(0, nome, OBJPROP_BACK, true);
 }
 
 void DesenharLinhaH(string nome, double preco, color cor, ENUM_LINE_STYLE estilo, int largura)
