@@ -1,8 +1,8 @@
-﻿//+------------------------------------------------------------------+
-//|         Boleta_Indice_Com_Painel_v1.58.mq5                       |
+//+------------------------------------------------------------------+
+//|         Boleta_Indice_Com_Painel_v1.59.mq5                       |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2026"
-#property version   "1.58"
+#property version   "1.59"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -11,18 +11,21 @@ CTrade trade;
 //--- Enumerador para a seleção da proporção de risco do Gain
 enum ENUM_RISK_RATIO
 {
-   RATIO_2_1 = 2, // Gain 2x o Loss
-   RATIO_3_1 = 3  // Gain 3x o Loss
+   RATIO_1_1 = 1, // Gain 1:1 o Loss (1x Loss, 1x Gain)
+   RATIO_2_2 = 2, // Gain 2:2 o Loss (2x Loss, 2x Gain)
+   RATIO_3_3 = 3, // Gain 3:3 o Loss (3x Loss, 3x Gain)
+   RATIO_2_1 = 4, // Gain 2x o Loss (1x Loss, 2x Gain)
+   RATIO_3_1 = 5  // Gain 3x o Loss (1x Loss, 3x Gain)
 };
 
 //--- Parâmetros de Entrada
 input group "--- Configurações Operacionais ---"
-input int               InpLotSize         = 1;         // Tamanho do Lote (1 Contrato para Mini-índice)
-input ENUM_RISK_RATIO InpRiskRewardRatio = RATIO_2_1;  // Proporção do Gain (Multiplicador do Loss)
-input int               InpMaxNegociosDia  = 3;         // Máximo de Negócios por Dia (Máx de Ordens = Negócios * 2)
+input int               InpLotSize         = 1;         // Tamanho do Lote (1 Contrato para Mini-índice)[cite: 2]
+input ENUM_RISK_RATIO   InpRiskRewardRatio = RATIO_2_1;   // Proporção do Gain (Multiplicador do Loss)[cite: 2]
+input int               InpMaxNegociosDia  = 3;         // Máximo de Negócios por Dia (Máx de Ordens = Negócios * 2)[cite: 2]
 
 input group "--- Configuração do Indicador Volatilidade ---"
-input int               InpATRPeriod       = 14;        // Período do ATR utilizado na fórmula
+input int               InpATRPeriod       = 14;        // Período do ATR utilizado na fórmula[cite: 2]
 
 const string PREFIX_OBJ = "Proj_";
 const string PREFIX_TXT = "Painel_";
@@ -30,8 +33,8 @@ const string LABEL_PRECO_POSICAO = "LABEL_PRECO_POSICAO";
 
 // Variáveis de controle de estado
 bool operacaoPendente = false;
-int  tipoOperacao = 0; // 1 = Compra, 2 = Venda
-int  handleATR;        // Ponteiro do indicador ATR
+int  tipoOperacao = 0; // 1 = Compra, 2 = Venda[cite: 2]
+int  handleATR;        // Ponteiro do indicador ATR[cite: 2]
 string globalMensagemStatus = "(C) Compra | (V) Venda | (Enter) Envia | (CTRL+Enter) Zera";
 bool posicaoEstavaAberta = false; 
 
@@ -58,6 +61,8 @@ int OnInit()
    Print("[SISTEMA PRONTO] Boleta carregada com sucesso no ativo: ", _Symbol);
    Print("==========================================================");
 
+// Força a atualização imediata do painel e redesenho do gráfico logo na inicialização
+   ProcessarRotinasDeAtualizacao();
    ChartRedraw(0);
    return(INIT_SUCCEEDED);
 }
@@ -171,7 +176,7 @@ double ObterValorATR()
    return atrBuffer[0] / _Point;
 }
 
-double CalcularPontosSL()
+double CalcularBaseSL()
 {
    double valorATR = ObterValorATR();
    double lossMinimo = 25.0;
@@ -181,7 +186,53 @@ double CalcularPontosSL()
    if(resultado < lossMinimo) resultado = lossMinimo;
    if(resultado > lossMaximo) resultado = lossMaximo;
    
-   return ArredondarParaPassoDoPreco(resultado);
+   return resultado;
+}
+
+// Retorna os pontos finais de SL aplicando o multiplicador de magnitude correto para 2:2 e 3:3
+double CalcularPontosSL()
+{
+   double baseSL = CalcularBaseSL();
+   double multiplicadorSL = 1.0;
+
+   switch(InpRiskRewardRatio)
+   {
+      case RATIO_1_1: multiplicadorSL = 1.0; break;
+      case RATIO_2_2: multiplicadorSL = 2.0; break; // 2x o tamanho do loss base
+      case RATIO_3_3: multiplicadorSL = 3.0; break; // 3x o tamanho do loss base
+      case RATIO_2_1: multiplicadorSL = 1.0; break;
+      case RATIO_3_1: multiplicadorSL = 1.0; break;
+   }
+
+   return ArredondarParaPassoDoPreco(baseSL * multiplicadorSL);
+}
+
+// Retorna o fator multiplicador para o cálculo do Gain em relação ao Loss configurado
+double ObterFatorMultiplicadorGain()
+{
+   switch(InpRiskRewardRatio)
+   {
+      case RATIO_1_1: return 1.0;
+      case RATIO_2_2: return 1.0; // Mantém proporção 1:1, mas com amplitude 2x maior
+      case RATIO_3_3: return 1.0; // Mantém proporção 1:1, mas com amplitude 3x maior
+      case RATIO_2_1: return 2.0; // Gain = 2x Loss (1 para 2)[cite: 2]
+      case RATIO_3_1: return 3.0; // Gain = 3x Loss (1 para 3)[cite: 2]
+      default:        return 2.0;
+   }
+}
+
+// Retorna a string legível da proporção para exibição no painel
+string ObterTextoProporcaoRisco()
+{
+   switch(InpRiskRewardRatio)
+   {
+      case RATIO_1_1: return "1:1";
+      case RATIO_2_2: return "2:2";
+      case RATIO_3_3: return "3:3";
+      case RATIO_2_1: return "1:2";
+      case RATIO_3_1: return "1:3";
+      default:        return "1:2";
+   }
 }
 
 void EnviarOrdemMercado()
@@ -195,7 +246,7 @@ void EnviarOrdemMercado()
    }
 
    double pontosSL = CalcularPontosSL();
-   double pontosTP = ArredondarParaPassoDoPreco(pontosSL * (double)InpRiskRewardRatio);
+   double pontosTP = ArredondarParaPassoDoPreco(pontosSL * ObterFatorMultiplicadorGain());
 
    if(tipoOperacao == 1) 
    {
@@ -533,7 +584,7 @@ int CalcularOperacoesDoMes()
 void DefaultAtualizarLinhasCustomizadas()
 {
    double pontosSL = CalcularPontosSL();
-   double pontosTP = ArredondarParaPassoDoPreco(pontosSL * (double)InpRiskRewardRatio);
+   double pontosTP = ArredondarParaPassoDoPreco(pontosSL * ObterFatorMultiplicadorGain());
 
    double precoReferencia = 0;
    double slProjetado = 0;
@@ -653,7 +704,7 @@ ENUM_BASE_CORNER ObterMelhorCantoPainel()
 void AtualizarPainelVisualEmTempoReal()
 {
    double exSL = CalcularPontosSL();
-   double exTP = ArredondarParaPassoDoPreco(exSL * (double)InpRiskRewardRatio);
+   double exTP = ArredondarParaPassoDoPreco(exSL * ObterFatorMultiplicadorGain());
    int margemDireita = 400;  
    
    ENUM_BASE_CORNER cantoPainel = ObterMelhorCantoPainel();
@@ -669,7 +720,7 @@ void AtualizarPainelVisualEmTempoReal()
    if(operacoesFeitasHoje >= maxOrdensPermitidas)
    {
       globalMensagemStatus = "Já deu por hoje";
-      corStatus = clrRed;
+      corStatus = clrBlack;
       ApagarLinhasProjecao();
    }
    else
@@ -772,7 +823,7 @@ void AtualizarPainelVisualEmTempoReal()
       CriarTextoLabel(PREFIX_TXT+"1", "-----------------------------------------------------------------------------------------", margemDireita, 117, 9, clrSilver, cantoPainel);
       CriarTextoLabel(PREFIX_TXT+"2", "Maior candle do dia: " + DoubleToString(maiorAmplitudeGlobal, 0) + " pontos | Horário: " + horarioMaiorCandle, margemDireita, 103, 9, clrOrangeRed, cantoPainel); 
       CriarTextoLabel(PREFIX_TXT+"3", "Total de candles do dia: " + IntegerToString(totalCandlesDoDia), margemDireita, 88, 9, clrSteelBlue, cantoPainel);
-      CriarTextoLabel(PREFIX_TXT+"4", "Alvos (" + IntegerToString(InpRiskRewardRatio) + ":1): SL = " + DoubleToString(exSL, 2) + " pts | TP = " + DoubleToString(exTP, 2) + " pts", margemDireita, 73, 9, clrSteelBlue, cantoPainel);
+      CriarTextoLabel(PREFIX_TXT+"4", "Alvos (" + ObterTextoProporcaoRisco() + "): SL = " + DoubleToString(exSL, 2) + " pts | TP = " + DoubleToString(exTP, 2) + " pts", margemDireita, 73, 9, clrSteelBlue, cantoPainel);
       CriarTextoLabel(PREFIX_TXT+"7", textoTotalMes, margemDireita, 58, 9, corTotalMes, cantoPainel);
       CriarTextoLabel(PREFIX_TXT+"6", textoTotalDia, margemDireita, 43, 9, corTotalDia, cantoPainel);
       CriarTextoLabel(PREFIX_TXT+"5", globalMensagemStatus, margemDireita, 28, 9, corStatus, cantoPainel);
@@ -784,7 +835,7 @@ void AtualizarPainelVisualEmTempoReal()
       CriarTextoLabel(PREFIX_TXT+"7", textoTotalMes, margemDireita, 50, 9, corTotalMes, cantoPainel);
       CriarTextoLabel(PREFIX_TXT+"2", "Maior candle do dia: " + DoubleToString(maiorAmplitudeGlobal, 0) + " pontos | Horário: " + horarioMaiorCandle, margemDireita, 65, 9, clrOrangeRed, cantoPainel); 
       CriarTextoLabel(PREFIX_TXT+"3", "Total de candles do dia: " + IntegerToString(totalCandlesDoDia), margemDireita, 80, 9, clrSteelBlue, cantoPainel);
-      CriarTextoLabel(PREFIX_TXT+"4", "Alvos (" + IntegerToString(InpRiskRewardRatio) + ":1): SL = " + DoubleToString(exSL, 2) + " pts | TP = " + DoubleToString(exTP, 2) + " pts", margemDireita, 95, 9, clrSteelBlue, cantoPainel);
+      CriarTextoLabel(PREFIX_TXT+"4", "Alvos (" + ObterTextoProporcaoRisco() + "): SL = " + DoubleToString(exSL, 2) + " pts | TP = " + DoubleToString(exTP, 2) + " pts", margemDireita, 95, 9, clrSteelBlue, cantoPainel);
       CriarTextoLabel(PREFIX_TXT+"1", "-----------------------------------------------------------------------------------------", margemDireita, 108, 9, clrSilver, cantoPainel);
       CriarTextoLabel(PREFIX_TXT+"0", textoPnLPainel, margemDireita, 121, 9, corPnL, cantoPainel);
    }

@@ -4,7 +4,17 @@
         {
             "label": "Compilar MQL5",
             "type": "shell",
-            "command": "& 'C:\\Users\\Eudes\\AppData\\Roaming\\MetaQuotes\\Terminal\\D0E8209F77C8CF37AD8BF550E51FF075\\metaeditor.exe' /compile:\"${file}\"",
+            "command": "\"C:\\Program Files\\MetaTrader 5\\metaeditor64.exe\"",
+            "args": [
+                "/compile:\"${file}\"",
+                "/log"
+            ],
+            "options": {
+                "shell": {
+                    "executable": "cmd.exe",
+                    "args": ["/d", "/c"]
+                }
+            },
             "group": {
                 "kind": "build",
                 "isDefault": true

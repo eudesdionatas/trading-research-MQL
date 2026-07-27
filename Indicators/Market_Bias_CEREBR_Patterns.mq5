@@ -1,10 +1,10 @@
-﻿//+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
 //|                                         Market_Bias_CEREBR.mq5   |
 //|                                  Copyright 2026, Gemini Adaptive |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2026, Gemini Adaptive"
 #property link      ""
-#property version   "5.00"
+#property version   "5.01"
 #property indicator_chart_window
 #property indicator_buffers 29
 #property indicator_plots   6
@@ -50,7 +50,7 @@ input bool     InpPlaySound        = true;             // Emitir alerta sonoro a
 
 input group "--- Padrões: Estrelas (Manhã / Tarde) ---"
 input bool     InpUseStars         = true;             // Ativar Estrela da Manhã / Tarde
-input double   InpStarBodyRatio    = 0.35;             // Tamanho máx do corpo da Estrela rel. ao candle 1
+input double   InpMinGapPoints     = 50.0;             // Tamanho mín do gap de corpo em pontos (ex: 50 ou 100)
 
 input group "--- Padrões: Engolfo (Alta / Baixa) ---"
 input bool     InpUseEngulfing     = true;             // Ativar Engolfos (Bullish / Bearish)
@@ -58,6 +58,7 @@ input bool     InpUseEngulfing     = true;             // Ativar Engolfos (Bulli
 input group "--- Padrões: Pinbars (Martelo / Estrela Cadente) ---"
 input bool     InpUsePinbars       = true;             // Ativar Martelo / Estrela Cadente
 input double   InpPinShadowRatio   = 2.0;              // Razão mínima do pavio em relação ao corpo
+input bool     InpStrictNoOppShadow= false;            // Exigir zero sombra oposta (rigor total clássico)
 
 // Buffers Gráficos - Nuvens (0 a 3)
 double BufBull1[], BufBull2[];
@@ -298,16 +299,22 @@ int OnCalculate(const int rates_total,
          string labelText     = "";
          int patternBarsCount = 1;
 
-         // A) PADRÕES DE ESTRELA (MANHÃ / TARDE)
+         // A) PADRÕES DE ESTRELA (MANHÃ / TARDE) - FOCO EXCLUSIVO NO GAP EM PONTOS
          if(InpUseStars)
          {
-            double body2 = MathAbs(close[i-2] - open[i-2]); 
-            double body1 = MathAbs(close[i-1] - open[i-1]); 
-
             // Estrela da Manhã (Alta)
             if(state >= 2)
             {
-               if((close[i-2] < open[i-2]) && (body1 <= body2 * InpStarBodyRatio) && (close[i] > open[i]) && (close[i] >= open[i-2] - (body2 / 2.0)))
+               bool isCandle2Bear = (close[i-2] < open[i-2]);
+               bool isCandle0Bull = (close[i] > open[i]);
+               
+               // O corpo da estrela deve estar abaixo do corpo anterior respeitando a distância mínima em pontos
+               bool gapPrev       = (MathMax(open[i-1], close[i-1]) <= MathMin(open[i-2], close[i-2]) - (InpMinGapPoints * _Point));
+               
+               // O corpo do candle seguinte deve estar acima do corpo da estrela respeitando a distância mínima em pontos
+               bool gapNext       = (MathMin(open[i], close[i]) >= MathMax(open[i-1], close[i-1]) + (InpMinGapPoints * _Point));
+
+               if(isCandle2Bear && isCandle0Bull && gapPrev && gapNext)
                {
                   isStarPattern = true;
                   isBull = true;
@@ -319,7 +326,16 @@ int OnCalculate(const int rates_total,
             // Estrela da Tarde (Baixa)
             if(state <= 1 && !isStarPattern)
             {
-               if((close[i-2] > open[i-2]) && (body1 <= body2 * InpStarBodyRatio) && (close[i] < open[i]) && (close[i] <= open[i-2] + (body2 / 2.0)))
+               bool isCandle2Bull = (close[i-2] > open[i-2]);
+               bool isCandle0Bear = (close[i] < open[i]);
+               
+               // O corpo da estrela deve estar acima do corpo anterior respeitando a distância mínima em pontos
+               bool gapPrev       = (MathMin(open[i-1], close[i-1]) >= MathMax(open[i-2], close[i-2]) + (InpMinGapPoints * _Point));
+               
+               // O corpo do candle seguinte deve estar abaixo do corpo da estrela respeitando a distância mínima em pontos
+               bool gapNext       = (MathMax(open[i], close[i]) <= MathMin(open[i-1], close[i-1]) - (InpMinGapPoints * _Point));
+
+               if(isCandle2Bull && isCandle0Bear && gapPrev && gapNext)
                {
                   isStarPattern = true;
                   isBull = false;
@@ -328,7 +344,7 @@ int OnCalculate(const int rates_total,
                }
             }
          }
-
+         
          // B) PADRÕES DE ENGOLFO (ALTA / BAIXA)
          if(InpUseEngulfing && !isStarPattern)
          {
@@ -366,17 +382,20 @@ int OnCalculate(const int rates_total,
             double upperShadow = high[i] - MathMax(open[i], close[i]);
             double lowerShadow = MathMin(open[i], close[i]) - low[i];
 
-            // Pinbars de Alta
+            // Pinbars de Alta (Martelo / Martelo Invertido) - Ocorrem após tendência de baixa (state >= 2 indica contexto de fundo/baixa)
             if(state >= 2)
             {
-               if(lowerShadow >= body * InpPinShadowRatio && lowerShadow > upperShadow)
+               bool validLowerShadow = InpStrictNoOppShadow ? (upperShadow <= _Point * 2) : (upperShadow < lowerShadow);
+               bool validUpperShadow = InpStrictNoOppShadow ? (lowerShadow <= _Point * 2) : (lowerShadow < upperShadow);
+
+               if(lowerShadow >= body * InpPinShadowRatio && validLowerShadow)
                {
                   isPinPattern = true;
                   isBull = true;
                   labelText = "Martelo ↑";
                   patternBarsCount = 1;
                }
-               else if(upperShadow >= body * InpPinShadowRatio && upperShadow > lowerShadow)
+               else if(upperShadow >= body * InpPinShadowRatio && validUpperShadow)
                {
                   isPinPattern = true;
                   isBull = true;
@@ -385,10 +404,14 @@ int OnCalculate(const int rates_total,
                }
             }
 
-            // Pinbars de Baixa
+            // Pinbars de Baixa (Estrela Cadente / Enforcado) - Ocorrem após tendência de alta (state <= 1 indica contexto de topo/alta)
             if(state <= 1 && !isPinPattern)
             {
-               if(upperShadow >= body * InpPinShadowRatio && upperShadow > lowerShadow)
+               // Estrela Cadente: Exige longa sombra superior (>= InpPinShadowRatio), corpo pequeno, 
+               // e sombra inferior ausente ou muito pequena/insignificante.
+               bool hasInsignificantLower = InpStrictNoOppShadow ? (lowerShadow <= 0.0) : (lowerShadow <= body * 0.3);
+
+               if(upperShadow >= body * InpPinShadowRatio && hasInsignificantLower)
                {
                   isPinPattern = true;
                   isBull = false;
@@ -404,7 +427,7 @@ int OnCalculate(const int rates_total,
                }
             }
          }
-
+         
          // D) RENDERING DE CORES E TEXTOS
          if(isStarPattern || isEngulfPattern || isPinPattern)
          {
