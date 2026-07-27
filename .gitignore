@@ -1,0 +1,12 @@
+# Ignorar logs, arquivos temporários e backups
+*.log
+*.tmp
+*.bak
+
+# Ignorar executáveis e compilados
+*.exe
+*.ex5
+
+# Ignorar bases de dados, histórico e cotações do MetaTrader
+*.hcc
+*.hst
