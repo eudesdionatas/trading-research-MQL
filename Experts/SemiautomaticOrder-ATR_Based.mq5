@@ -1,4 +1,4 @@
-//+------------------------------------------------------------------+
+﻿//+------------------------------------------------------------------+
 //|         Boleta_Indice_Com_Painel_v1.59.mq5                       |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2026"
@@ -20,12 +20,12 @@ enum ENUM_RISK_RATIO
 
 //--- Parâmetros de Entrada
 input group "--- Configurações Operacionais ---"
-input int               InpLotSize         = 1;         // Tamanho do Lote (1 Contrato para Mini-índice)[cite: 2]
-input ENUM_RISK_RATIO   InpRiskRewardRatio = RATIO_2_1;   // Proporção do Gain (Multiplicador do Loss)[cite: 2]
-input int               InpMaxNegociosDia  = 3;         // Máximo de Negócios por Dia (Máx de Ordens = Negócios * 2)[cite: 2]
+input int               InpLotSize         = 1;           // Tamanho do Lote (1 Contrato para Mini-índice)
+input ENUM_RISK_RATIO   InpRiskRewardRatio = RATIO_2_1;   // Proporção do Gain (Multiplicador do Loss)
+input int               InpMaxNegociosDia  = 3;           // Máximo de Negócios por Dia (Máx de Ordens = Negócios * 2)
 
 input group "--- Configuração do Indicador Volatilidade ---"
-input int               InpATRPeriod       = 14;        // Período do ATR utilizado na fórmula[cite: 2]
+input int               InpATRPeriod       = 14;        // Período do ATR utilizado na fórmula
 
 const string PREFIX_OBJ = "Proj_";
 const string PREFIX_TXT = "Painel_";
@@ -33,8 +33,8 @@ const string LABEL_PRECO_POSICAO = "LABEL_PRECO_POSICAO";
 
 // Variáveis de controle de estado
 bool operacaoPendente = false;
-int  tipoOperacao = 0; // 1 = Compra, 2 = Venda[cite: 2]
-int  handleATR;        // Ponteiro do indicador ATR[cite: 2]
+int  tipoOperacao = 0; // 1 = Compra, 2 = Venda
+int  handleATR;        // Ponteiro do indicador ATR
 string globalMensagemStatus = "(C) Compra | (V) Venda | (Enter) Envia | (CTRL+Enter) Zera";
 bool posicaoEstavaAberta = false; 
 
@@ -215,8 +215,8 @@ double ObterFatorMultiplicadorGain()
       case RATIO_1_1: return 1.0;
       case RATIO_2_2: return 1.0; // Mantém proporção 1:1, mas com amplitude 2x maior
       case RATIO_3_3: return 1.0; // Mantém proporção 1:1, mas com amplitude 3x maior
-      case RATIO_2_1: return 2.0; // Gain = 2x Loss (1 para 2)[cite: 2]
-      case RATIO_3_1: return 3.0; // Gain = 3x Loss (1 para 3)[cite: 2]
+      case RATIO_2_1: return 2.0; // Gain = 2x Loss (1 para 2)
+      case RATIO_3_1: return 3.0; // Gain = 3x Loss (1 para 3)
       default:        return 2.0;
    }
 }
