@@ -668,7 +668,7 @@ void AtualizarPainelVisualEmTempoReal()
 
    if(operacoesFeitasHoje >= maxOrdensPermitidas)
    {
-      globalMensagemStatus = "          >>>>>>>>> Já deu por hoje <<<<<<<<";
+      globalMensagemStatus = "Já deu por hoje";
       corStatus = clrRed;
       ApagarLinhasProjecao();
    }
