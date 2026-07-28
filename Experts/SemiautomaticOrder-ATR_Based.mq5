@@ -2,7 +2,7 @@
 //|         Boleta_Indice_Com_Painel_v1.59.mq5                       |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2026"
-#property version   "1.60"
+#property version   "1.61"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -298,13 +298,22 @@ void VerificarResultadoETocarSomSaida()
       }
    }
 
-   if(encontrouDealSaida && ultimoLucro > 0.0)
+if(encontrouDealSaida && ultimoLucro > 0.0)
    {
-      PlaySound("\\Audio\\gain.wav");
+      // Tenta tocar da pasta padrão (ex: "gain.wav" na pasta Sounds do terminal)
+      // Caso queira testar a existência física ou chamar direto com fallback:
+      if(!PlaySound("gain.wav"))
+      {
+         // Se falhar na padrão, tenta na subpasta \Audio\
+         PlaySound("\\Audio\\gain.wav");
+      }
    }
    else
    {
-      PlaySound("stops.wav");
+      if(!PlaySound("stops.wav"))
+      {
+         PlaySound("\\Audio\\stops.wav");
+      }
    }
 }
 
