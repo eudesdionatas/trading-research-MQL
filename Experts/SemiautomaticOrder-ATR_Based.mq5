@@ -1,8 +1,8 @@
-﻿//+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
 //|         Boleta_Indice_Com_Painel_v1.59.mq5                       |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2026"
-#property version   "1.59"
+#property version   "1.60"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -453,7 +453,8 @@ int CalcularOperacoesDoDia()
          if(ativoDeal == _Symbol)
          {
             long entradaDeal = HistoryDealGetInteger(ticketDeal, DEAL_ENTRY);
-            if(entradaDeal == DEAL_ENTRY_OUT || entradaDeal == DEAL_ENTRY_INOUT)
+            // Conta +1 para a abertura (entrada) da OCO e +1 para o fechamento (TP, SL ou Zera)
+            if(entradaDeal == DEAL_ENTRY_IN || entradaDeal == DEAL_ENTRY_OUT || entradaDeal == DEAL_ENTRY_INOUT)
             {
                totalOps++;
             }
@@ -570,7 +571,8 @@ int CalcularOperacoesDoMes()
          if(ativoDeal == _Symbol)
          {
             long entradaDeal = HistoryDealGetInteger(ticketDeal, DEAL_ENTRY);
-            if(entradaDeal == DEAL_ENTRY_OUT || entradaDeal == DEAL_ENTRY_INOUT)
+            // Conta +1 para a entrada (abertura) e +1 para a saída (TP, SL ou Zera) no mês
+            if(entradaDeal == DEAL_ENTRY_IN || entradaDeal == DEAL_ENTRY_OUT || entradaDeal == DEAL_ENTRY_INOUT)
             {
                totalOpsMes++;
             }

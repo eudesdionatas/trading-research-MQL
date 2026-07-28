@@ -4,7 +4,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2026, Gemini Adaptive"
 #property link      ""
-#property version   "5.01"
+#property version   "5.02"
 #property indicator_chart_window
 #property indicator_buffers 29
 #property indicator_plots   6
@@ -308,10 +308,7 @@ int OnCalculate(const int rates_total,
                bool isCandle2Bear = (close[i-2] < open[i-2]);
                bool isCandle0Bull = (close[i] > open[i]);
                
-               // O corpo da estrela deve estar abaixo do corpo anterior respeitando a distância mínima em pontos
                bool gapPrev       = (MathMax(open[i-1], close[i-1]) <= MathMin(open[i-2], close[i-2]) - (InpMinGapPoints * _Point));
-               
-               // O corpo do candle seguinte deve estar acima do corpo da estrela respeitando a distância mínima em pontos
                bool gapNext       = (MathMin(open[i], close[i]) >= MathMax(open[i-1], close[i-1]) + (InpMinGapPoints * _Point));
 
                if(isCandle2Bear && isCandle0Bull && gapPrev && gapNext)
@@ -329,10 +326,7 @@ int OnCalculate(const int rates_total,
                bool isCandle2Bull = (close[i-2] > open[i-2]);
                bool isCandle0Bear = (close[i] < open[i]);
                
-               // O corpo da estrela deve estar acima do corpo anterior respeitando a distância mínima em pontos
                bool gapPrev       = (MathMin(open[i-1], close[i-1]) >= MathMax(open[i-2], close[i-2]) + (InpMinGapPoints * _Point));
-               
-               // O corpo do candle seguinte deve estar abaixo do corpo da estrela respeitando a distância mínima em pontos
                bool gapNext       = (MathMax(open[i], close[i]) <= MathMin(open[i-1], close[i-1]) - (InpMinGapPoints * _Point));
 
                if(isCandle2Bull && isCandle0Bear && gapPrev && gapNext)
@@ -345,13 +339,22 @@ int OnCalculate(const int rates_total,
             }
          }
          
-         // B) PADRÕES DE ENGOLFO (ALTA / BAIXA)
+         // B) PADRÕES DE ENGOLFO (ALTA / BAIXA) - REVISADO CONFORME DIRETRIZES
          if(InpUseEngulfing && !isStarPattern)
          {
-            // Engolfo de Alta
+            // Engolfo de Alta (Ocorre após fundo / tendência de baixa: state >= 2)
             if(state >= 2)
             {
-               if((close[i-1] < open[i-1]) && (close[i] > open[i]) && (open[i] <= close[i-1]) && (close[i] >= open[i-1]))
+               // 1º candle: pequeno corpo negro (baixa) -> close[i-1] < open[i-1]
+               bool candle1Neg = (close[i-1] < open[i-1]);
+               // 2º candle: corpo branco (alta) bem maior -> close[i] > open[i]
+               bool candle2Pos = (close[i] > open[i]);
+               
+               // O corpo do segundo engolfa completamente o primeiro, com mínimas/máximas ajustadas
+               bool engulfsBody = (open[i] <= close[i-1] && close[i] >= open[i-1]);
+               bool strictRange = (close[i] > open[i-1] && open[i] < close[i-1]); // corpo engolfando estritamente
+
+               if(candle1Neg && candle2Pos && (engulfsBody || strictRange))
                {
                   isEngulfPattern = true;
                   isBull = true;
@@ -360,10 +363,19 @@ int OnCalculate(const int rates_total,
                }
             }
 
-            // Engolfo de Baixa
+            // Engolfo de Baixa (Ocorre após topo / tendência de alta: state <= 1)
             if(state <= 1 && !isStarPattern && !isEngulfPattern)
             {
-               if((close[i-1] > open[i-1]) && (close[i] < open[i]) && (open[i] >= close[i-1]) && (close[i] <= open[i-1]))
+               // 1º candle: corpo de alta e pequeno -> close[i-1] > open[i-1]
+               bool candle1Pos = (close[i-1] > open[i-1]);
+               // 2º candle: de baixa e mais alongado -> close[i] < open[i]
+               bool candle2Neg = (close[i] < open[i]);
+               
+               // Abre com preço acima e fecha com preço abaixo do anterior, cobrindo-o
+               bool engulfsBody = (open[i] >= close[i-1] && close[i] <= open[i-1]);
+               bool strictRange = (close[i] < open[i-1] && open[i] > close[i-1]);
+
+               if(candle1Pos && candle2Neg && (engulfsBody || strictRange))
                {
                   isEngulfPattern = true;
                   isBull = false;
@@ -382,7 +394,6 @@ int OnCalculate(const int rates_total,
             double upperShadow = high[i] - MathMax(open[i], close[i]);
             double lowerShadow = MathMin(open[i], close[i]) - low[i];
 
-            // Pinbars de Alta (Martelo / Martelo Invertido) - Ocorrem após tendência de baixa (state >= 2 indica contexto de fundo/baixa)
             if(state >= 2)
             {
                bool validLowerShadow = InpStrictNoOppShadow ? (upperShadow <= _Point * 2) : (upperShadow < lowerShadow);
@@ -404,11 +415,8 @@ int OnCalculate(const int rates_total,
                }
             }
 
-            // Pinbars de Baixa (Estrela Cadente / Enforcado) - Ocorrem após tendência de alta (state <= 1 indica contexto de topo/alta)
             if(state <= 1 && !isPinPattern)
             {
-               // Estrela Cadente: Exige longa sombra superior (>= InpPinShadowRatio), corpo pequeno, 
-               // e sombra inferior ausente ou muito pequena/insignificante.
                bool hasInsignificantLower = InpStrictNoOppShadow ? (lowerShadow <= 0.0) : (lowerShadow <= body * 0.3);
 
                if(upperShadow >= body * InpPinShadowRatio && hasInsignificantLower)
@@ -578,3 +586,5 @@ int OnCalculate(const int rates_total,
 
    return(rates_total);
 }
+
+
