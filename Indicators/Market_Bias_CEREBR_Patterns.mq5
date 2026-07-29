@@ -4,9 +4,9 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2026, Gemini Adaptive"
 #property link      ""
-#property version   "5.02"
+#property version   "5.08"
 #property indicator_chart_window
-#property indicator_buffers 29
+#property indicator_buffers 30
 #property indicator_plots   6
 
 // Plot 1: Nuvem Bullish (Alta)
@@ -19,22 +19,22 @@
 #property indicator_type2   DRAW_FILLING
 #property indicator_color2  clrLightPink, clrMistyRose
 
-// Plot 3: Candles Base + Candles de Baixa (4 = Preto/Engolfo, 5 = DarkGoldenrod/Estrelas, 6 = RoyalBlue/Pinbars)
+// Plot 3: Candles Base + Candles de Baixa
 #property indicator_label3  "Bias & Bear Pattern Candles"
 #property indicator_type3   DRAW_COLOR_CANDLES
 #property indicator_color3  clrLime, clrDarkSeaGreen, clrRed, clrLightCoral, clrBlack, clrDarkGoldenrod, clrRoyalBlue
 
-// Plot 4: Overlay Estrela de Alta (Borda/Pavio: DarkGoldenrod, Corpo: LightYellow)
+// Plot 4: Overlay Estrela de Alta
 #property indicator_label4  "Star Bull Candles"
 #property indicator_type4   DRAW_CANDLES
 #property indicator_color4  clrDarkGoldenrod, clrLightYellow, clrDarkGoldenrod
 
-// Plot 5: Overlay Engolfo de Alta (Borda/Pavio: Preto, Corpo: Branco)
+// Plot 5: Overlay Engolfo de Alta
 #property indicator_label5  "Engulfing Bull Candles"
 #property indicator_type5   DRAW_CANDLES
 #property indicator_color5  clrBlack, clrWhite, clrBlack
 
-// Plot 6: Overlay Pinbar de Alta (Borda/Pavio: RoyalBlue, Corpo: AliceBlue)
+// Plot 6: Overlay Pinbar de Alta
 #property indicator_label6  "Pinbar Bull Candles"
 #property indicator_type6   DRAW_CANDLES
 #property indicator_color6  clrRoyalBlue, clrAliceBlue, clrRoyalBlue
@@ -50,15 +50,20 @@ input bool     InpPlaySound        = true;             // Emitir alerta sonoro a
 
 input group "--- Padrões: Estrelas (Manhã / Tarde) ---"
 input bool     InpUseStars         = true;             // Ativar Estrela da Manhã / Tarde
-input double   InpMinGapPoints     = 50.0;             // Tamanho mín do gap de corpo em pontos (ex: 50 ou 100)
+input double   InpMinGapPoints     = 50.0;             // Tamanho mín do gap de corpo em pontos
 
 input group "--- Padrões: Engolfo (Alta / Baixa) ---"
 input bool     InpUseEngulfing     = true;             // Ativar Engolfos (Bullish / Bearish)
+input double   InpMinEngulfMargin  = 10.0;             // Margem mínima em pontos que o corpo deve ultrapassar
 
 input group "--- Padrões: Pinbars (Martelo / Estrela Cadente) ---"
-input bool     InpUsePinbars       = true;             // Ativar Martelo / Estrela Cadente
-input double   InpPinShadowRatio   = 2.0;              // Razão mínima do pavio em relação ao corpo
-input bool     InpStrictNoOppShadow= false;            // Exigir zero sombra oposta (rigor total clássico)
+input bool     InpUsePinbars       = true;             // Ativar Martelo / Estrela Cadente / Enforcado
+input int      InpPinTrendLen      = 9;                // Período da EMA rápida para filtro de Pinbars
+input int      InpPriorTrendBars   = 5;                // Barras para checar se a tendência anterior era de baixa/alta
+input double   InpPinShadowRatio   = 2.5;              // Razão mínima: Pavio principal deve ser X vezes o corpo
+input double   InpMinBodyRatioOfShd= 0.15;             // Corpo deve ser pelo menos 15% do pavio (Elimina Dojis/cruzes)
+input double   InpOppShadowMaxRatio= 0.30;             // Razão máxima do pavio oposto em relação ao principal
+input bool     InpStrictNoOppShadow= false;            // Exigir zero sombra oposta
 
 // Buffers Gráficos - Nuvens (0 a 3)
 double BufBull1[], BufBull2[];
@@ -71,31 +76,33 @@ double BufCandleLow[];
 double BufCandleClose[];
 double BufCandleColors[];
 
-// Buffers - Plot 4 (DRAW_CANDLES Estrela Alta: 9 a 12)
+// Buffers - Plot 4 (Estrela Alta)
 double BufStarOverlayOpen[];
 double BufStarOverlayHigh[];
 double BufStarOverlayLow[];
 double BufStarOverlayClose[];
 
-// Buffers - Plot 5 (DRAW_CANDLES Engolfo Alta: 13 a 16)
+// Buffers - Plot 5 (Engolfo Alta)
 double BufEngulfOverlayOpen[];
 double BufEngulfOverlayHigh[];
 double BufEngulfOverlayLow[];
 double BufEngulfOverlayClose[];
 
-// Buffers - Plot 6 (DRAW_CANDLES Pinbar Alta: 17 a 20)
+// Buffers - Plot 6 (Pinbar Alta)
 double BufPinOverlayOpen[];
 double BufPinOverlayHigh[];
 double BufPinOverlayLow[];
 double BufPinOverlayClose[];
 
-// Buffers de Cálculo Interno (21 a 28)
+// Buffers de Cálculo Interno
 double BufXHAOpen[], BufHAClose[];
 double BufO2[], BufC2[], BufH2[], BufL2[];
 double BufOscBias[], BufOscSmooth[];
+double BufPinTrendEMA[];
 
 // Handles das EMAs
 int handleEMA_O, handleEMA_C, handleEMA_H, handleEMA_L;
+int handleEMA_PinTrend;
 
 // Prefixos e Variáveis de Controle
 string TextPrefix = "MBC_Pattern_Text_";
@@ -138,6 +145,7 @@ int OnInit()
    SetIndexBuffer(26, BufL2,        INDICATOR_CALCULATIONS);
    SetIndexBuffer(27, BufOscBias,   INDICATOR_CALCULATIONS);
    SetIndexBuffer(28, BufOscSmooth, INDICATOR_CALCULATIONS);
+   SetIndexBuffer(29, BufPinTrendEMA, INDICATOR_CALCULATIONS);
 
    ArraySetAsSeries(BufBull1, false);               ArraySetAsSeries(BufBull2, false);
    ArraySetAsSeries(BufBear1, false);               ArraySetAsSeries(BufBear2, false);
@@ -155,13 +163,15 @@ int OnInit()
    ArraySetAsSeries(BufO2, false);                  ArraySetAsSeries(BufC2, false);
    ArraySetAsSeries(BufH2, false);                  ArraySetAsSeries(BufL2, false);
    ArraySetAsSeries(BufOscBias, false);             ArraySetAsSeries(BufOscSmooth, false);
+   ArraySetAsSeries(BufPinTrendEMA, false);
 
    handleEMA_O = iMA(_Symbol, _Period, InpLen, 0, MODE_EMA, PRICE_OPEN);
    handleEMA_C = iMA(_Symbol, _Period, InpLen, 0, MODE_EMA, PRICE_CLOSE);
    handleEMA_H = iMA(_Symbol, _Period, InpLen, 0, MODE_EMA, PRICE_HIGH);
    handleEMA_L = iMA(_Symbol, _Period, InpLen, 0, MODE_EMA, PRICE_LOW);
+   handleEMA_PinTrend = iMA(_Symbol, _Period, InpPinTrendLen, 0, MODE_EMA, PRICE_CLOSE);
 
-   if(handleEMA_O == INVALID_HANDLE || handleEMA_C == INVALID_HANDLE) return(INIT_FAILED);
+   if(handleEMA_O == INVALID_HANDLE || handleEMA_C == INVALID_HANDLE || handleEMA_PinTrend == INVALID_HANDLE) return(INIT_FAILED);
 
    IndicatorSetString(INDICATOR_SHORTNAME, "Market Bias & Candlestick Patterns");
    return(INIT_SUCCEEDED);
@@ -185,16 +195,18 @@ int OnCalculate(const int rates_total,
                 const long &volume[],
                 const int &spread[])
 {
-   if(rates_total < InpLen + 5) return(0);
+   if(rates_total < MathMax(InpLen, InpPinTrendLen) + MathMax(5, InpPriorTrendBars)) return(0);
 
-   double emaO[], emaC[], emaH[], emaL[];
+   double emaO[], emaC[], emaH[], emaL[], pinTrend[];
    if(CopyBuffer(handleEMA_O, 0, 0, rates_total, emaO) <= 0) return(0);
    if(CopyBuffer(handleEMA_C, 0, 0, rates_total, emaC) <= 0) return(0);
    if(CopyBuffer(handleEMA_H, 0, 0, rates_total, emaH) <= 0) return(0);
    if(CopyBuffer(handleEMA_L, 0, 0, rates_total, emaL) <= 0) return(0);
+   if(CopyBuffer(handleEMA_PinTrend, 0, 0, rates_total, pinTrend) <= 0) return(0);
 
    int limit = prev_calculated - 1;
-   if(limit < InpLen) limit = InpLen;
+   int maxLen = MathMax(InpLen, InpPinTrendLen);
+   if(limit < maxLen) limit = maxLen;
    if(prev_calculated > 0) limit = prev_calculated - 3;
 
    double alpha2   = 2.0 / (InpLen2 + 1.0);
@@ -202,6 +214,8 @@ int OnCalculate(const int rates_total,
 
    for(int i = limit; i < rates_total; i++)
    {
+      BufPinTrendEMA[i] = pinTrend[i];
+
       // --- 1. HEIKIN ASHI BASE ---
       double haClose = (emaO[i] + emaH[i] + emaL[i] + emaC[i]) / 4.0;
       double xhaOpen = (emaO[i] + emaC[i]) / 2.0;
@@ -274,9 +288,8 @@ int OnCalculate(const int rates_total,
       }
 
       // --- 5. DETECÇÃO E HIGHLIGHT DE PADRÕES ---
-      if(i > InpLen + 3)
+      if(i > maxLen + InpPriorTrendBars + 3)
       {
-         // Reset Padrão da Barra Atual
          BufCandleOpen[i]   = open[i];
          BufCandleHigh[i]   = high[i];
          BufCandleLow[i]    = low[i];
@@ -299,10 +312,9 @@ int OnCalculate(const int rates_total,
          string labelText     = "";
          int patternBarsCount = 1;
 
-         // A) PADRÕES DE ESTRELA (MANHÃ / TARDE) - FOCO EXCLUSIVO NO GAP EM PONTOS
+         // A) PADRÕES DE ESTRELA (MANHÃ / TARDE)
          if(InpUseStars)
          {
-            // Estrela da Manhã (Alta)
             if(state >= 2)
             {
                bool isCandle2Bear = (close[i-2] < open[i-2]);
@@ -320,7 +332,6 @@ int OnCalculate(const int rates_total,
                }
             }
 
-            // Estrela da Tarde (Baixa)
             if(state <= 1 && !isStarPattern)
             {
                bool isCandle2Bull = (close[i-2] > open[i-2]);
@@ -339,22 +350,18 @@ int OnCalculate(const int rates_total,
             }
          }
          
-         // B) PADRÕES DE ENGOLFO (ALTA / BAIXA) - REVISADO CONFORME DIRETRIZES
+         // B) PADRÕES DE ENGOLFO (ALTA / BAIXA)
          if(InpUseEngulfing && !isStarPattern)
          {
-            // Engolfo de Alta (Ocorre após fundo / tendência de baixa: state >= 2)
+            double margin = InpMinEngulfMargin * _Point;
+
             if(state >= 2)
             {
-               // 1º candle: pequeno corpo negro (baixa) -> close[i-1] < open[i-1]
                bool candle1Neg = (close[i-1] < open[i-1]);
-               // 2º candle: corpo branco (alta) bem maior -> close[i] > open[i]
                bool candle2Pos = (close[i] > open[i]);
-               
-               // O corpo do segundo engolfa completamente o primeiro, com mínimas/máximas ajustadas
-               bool engulfsBody = (open[i] <= close[i-1] && close[i] >= open[i-1]);
-               bool strictRange = (close[i] > open[i-1] && open[i] < close[i-1]); // corpo engolfando estritamente
+               bool strictRange = (close[i] >= (MathMax(open[i-1], close[i-1]) + margin) && open[i] <= (MathMin(open[i-1], close[i-1]) - margin));
 
-               if(candle1Neg && candle2Pos && (engulfsBody || strictRange))
+               if(candle1Neg && candle2Pos && strictRange)
                {
                   isEngulfPattern = true;
                   isBull = true;
@@ -363,19 +370,13 @@ int OnCalculate(const int rates_total,
                }
             }
 
-            // Engolfo de Baixa (Ocorre após topo / tendência de alta: state <= 1)
             if(state <= 1 && !isStarPattern && !isEngulfPattern)
             {
-               // 1º candle: corpo de alta e pequeno -> close[i-1] > open[i-1]
                bool candle1Pos = (close[i-1] > open[i-1]);
-               // 2º candle: de baixa e mais alongado -> close[i] < open[i]
                bool candle2Neg = (close[i] < open[i]);
-               
-               // Abre com preço acima e fecha com preço abaixo do anterior, cobrindo-o
-               bool engulfsBody = (open[i] >= close[i-1] && close[i] <= open[i-1]);
-               bool strictRange = (close[i] < open[i-1] && open[i] > close[i-1]);
+               bool strictRange = (close[i] <= (MathMin(open[i-1], close[i-1]) - margin) && open[i] >= (MathMax(open[i-1], close[i-1]) + margin));
 
-               if(candle1Pos && candle2Neg && (engulfsBody || strictRange))
+               if(candle1Pos && candle2Neg && strictRange)
                {
                   isEngulfPattern = true;
                   isBull = false;
@@ -385,28 +386,66 @@ int OnCalculate(const int rates_total,
             }
          }
 
-         // C) PADRÕES DE PINBAR (MARTELO / ESTRELA CADENTE / ENFORCADO)
+         // C) PADRÕES DE PINBAR (MARTELO / ENFORCADO / ESTRELA CADENTE) COM FILTRO RIGOROSO DE TENDÊNCIA PRÉVIA
          if(InpUsePinbars && !isStarPattern && !isEngulfPattern)
          {
             double body = MathAbs(close[i] - open[i]);
-            if(body == 0) body = _Point; 
-
             double upperShadow = high[i] - MathMax(open[i], close[i]);
             double lowerShadow = MathMin(open[i], close[i]) - low[i];
 
-            if(state >= 2)
+            // Avalia a tendência anterior olhando as últimas N barras (ex: i-1 até i-InpPriorTrendBars)
+            bool priorTrendDown = true;
+            bool priorTrendUp   = true;
+            for(int p = 1; p <= InpPriorTrendBars; p++)
             {
-               bool validLowerShadow = InpStrictNoOppShadow ? (upperShadow <= _Point * 2) : (upperShadow < lowerShadow);
-               bool validUpperShadow = InpStrictNoOppShadow ? (lowerShadow <= _Point * 2) : (lowerShadow < upperShadow);
+               if(close[i-p] >= close[i-p-1]) priorTrendDown = false;
+               if(close[i-p] <= close[i-p-1]) priorTrendUp   = false;
+            }
+            
+            // Confirmação complementar pela EMA de curto prazo
+            bool isShortTrendBear = (close[i] < pinTrend[i]);
+            bool isShortTrendBull = (close[i] > pinTrend[i]);
 
-               if(lowerShadow >= body * InpPinShadowRatio && validLowerShadow)
+            // 1. MARTELO (Exige tendência prévia de BAIXA real)
+            if(priorTrendDown && isShortTrendBear)
+            {
+               bool validLowerShadow = (lowerShadow >= body * InpPinShadowRatio);
+               bool validMinBody     = (body >= lowerShadow * InpMinBodyRatioOfShd);
+               bool validUpper       = InpStrictNoOppShadow ? (upperShadow <= _Point * 2) : (upperShadow <= lowerShadow * InpOppShadowMaxRatio);
+
+               if(validLowerShadow && validMinBody && validUpper)
                {
                   isPinPattern = true;
                   isBull = true;
                   labelText = "Martelo ↑";
                   patternBarsCount = 1;
                }
-               else if(upperShadow >= body * InpPinShadowRatio && validUpperShadow)
+            }
+
+            // 2. ENFORCADO (Exige tendência prévia de ALTA real - substitui o erro do martelo no topo)
+            if(!isPinPattern && priorTrendUp && isShortTrendBull)
+            {
+               bool validLowerShadow = (lowerShadow >= body * InpPinShadowRatio);
+               bool validMinBody     = (body >= lowerShadow * InpMinBodyRatioOfShd);
+               bool validUpper       = InpStrictNoOppShadow ? (upperShadow <= _Point * 2) : (upperShadow <= lowerShadow * InpOppShadowMaxRatio);
+
+               if(validLowerShadow && validMinBody && validUpper)
+               {
+                  isPinPattern = true;
+                  isBull = false; // Enforcado é sinal de baixa no topo!
+                  labelText = "Enforcado ↓";
+                  patternBarsCount = 1;
+               }
+            }
+
+            // 3. MARTELO INVERTIDO (Tendência de baixa)
+            if(!isPinPattern && priorTrendDown && isShortTrendBear)
+            {
+               bool validUpperShadow = (upperShadow >= body * InpPinShadowRatio);
+               bool validMinBody     = (body >= upperShadow * InpMinBodyRatioOfShd);
+               bool validLower       = InpStrictNoOppShadow ? (lowerShadow <= _Point * 2) : (lowerShadow <= upperShadow * InpOppShadowMaxRatio);
+
+               if(validUpperShadow && validMinBody && validLower)
                {
                   isPinPattern = true;
                   isBull = true;
@@ -415,22 +454,18 @@ int OnCalculate(const int rates_total,
                }
             }
 
-            if(state <= 1 && !isPinPattern)
+            // 4. ESTRELA CADENTE (Tendência de alta)
+            if(!isPinPattern && priorTrendUp && isShortTrendBull)
             {
-               bool hasInsignificantLower = InpStrictNoOppShadow ? (lowerShadow <= 0.0) : (lowerShadow <= body * 0.3);
+               bool validUpperShadow = (upperShadow >= body * InpPinShadowRatio);
+               bool validMinBody     = (body >= upperShadow * InpMinBodyRatioOfShd);
+               bool validLower       = InpStrictNoOppShadow ? (lowerShadow <= _Point * 2) : (lowerShadow <= upperShadow * InpOppShadowMaxRatio);
 
-               if(upperShadow >= body * InpPinShadowRatio && hasInsignificantLower)
+               if(validUpperShadow && validMinBody && validLower)
                {
                   isPinPattern = true;
                   isBull = false;
                   labelText = "Estrela Cadente ↓";
-                  patternBarsCount = 1;
-               }
-               else if(lowerShadow >= body * InpPinShadowRatio && lowerShadow > upperShadow)
-               {
-                  isPinPattern = true;
-                  isBull = false;
-                  labelText = "Enforcado ↓";
                   patternBarsCount = 1;
                }
             }
@@ -500,7 +535,8 @@ int OnCalculate(const int rates_total,
                }
                else if(isPinPattern)
                {
-                  if(close[k] >= open[k])
+                  // Se for um Enforcado ou Estrela Cadente (isBull = false), mantemos o candle pintado de baixa/padrão correspondente
+                  if(isBull && close[k] >= open[k])
                   {
                      BufPinOverlayOpen[k]   = open[k];
                      BufPinOverlayHigh[k]   = high[k];
@@ -586,5 +622,3 @@ int OnCalculate(const int rates_total,
 
    return(rates_total);
 }
-
-
