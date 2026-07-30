@@ -175,7 +175,7 @@ void OnChartEvent(const int id, const long& lparam, const double& dparam, const 
 
       if(limiteOrdensAtingido || limiteLossAtingido || limiteGainAtingido)
       {
-         globalMensagemStatus = "Já deu por hoje";
+         globalMensagemStatus = "Basta por hoje!";
          ApagarLinhasProjecao();
          return;
       }
@@ -259,7 +259,7 @@ void EnviarOrdemMercado()
       pnlDiarioAtual <= TabelaFases[faseAtual].lossDiario || 
       pnlDiarioAtual >= TabelaFases[faseAtual].gainDiario)
    {
-      globalMensagemStatus = "Já deu por hoje";
+      globalMensagemStatus = "Basta por hoje!";
       ApagarLinhasProjecao();
       return;
    }
@@ -663,7 +663,7 @@ void AtualizarPainelVisualEmTempoReal()
 {
    double exSL = 0, exTP = 0;
    ObterPontosAlvosFase(exSL, exTP);
-   int margemDireita = 380;  
+   int margemDireita = 360;  
    
    string textoPnLPainel = StringFormat("Posição (0 %s)", _Symbol);
    color corPnL = clrSilver;
@@ -679,13 +679,13 @@ void AtualizarPainelVisualEmTempoReal()
 
    if(limiteOrdensAtingido || limiteLossAtingido || limiteGainAtingido)
    {
-      globalMensagemStatus = "Já deu por hoje";
+      globalMensagemStatus = "Basta por hoje!";
       corStatus = clrBlack;
       ApagarLinhasProjecao();
    }
    else
    {
-      if(globalMensagemStatus == "Já deu por hoje" && !PositionSelect(_Symbol))
+      if(globalMensagemStatus == "Basta por hoje!" && !PositionSelect(_Symbol))
       {
          globalMensagemStatus = "(C) Compra | (V) Venda | (Enter) Envia | (CTRL+Enter) Zera";
       }
