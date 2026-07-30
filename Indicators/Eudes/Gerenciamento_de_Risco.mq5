@@ -734,14 +734,14 @@ void AtualizarPainelVisualEmTempoReal()
    string strTotalDia = DoubleToString(totalDoDia, 2); StringReplace(strTotalDia, ".", ",");
    string strPontosDia = DoubleToString(totalPontosDia, 0); StringReplace(strPontosDia, ".", ",");
    string textoTotalDia = StringFormat("PnL Diário: R$ %s | %s pts | Operações: %d/%d", strTotalDia, strPontosDia, operacoesFeitasHoje, maxOrdensPermitidas);
-   color corTotalDia = (totalDoDia > 0.0) ? C'6,136,6' : (totalDoDia < 0.0 ? clrRed : clrSilver);
+   color corTotalDia = (totalDoDia > 0.0) ? clrLimeGreen : (totalDoDia < 0.0 ? clrRed : clrSilver);
 
    double totalDoMes = CalcularResultadoFinanceiroDoMes();
    double totalPontosMes = CalcularPontosDoMes();
    string strTotalMes = DoubleToString(totalDoMes, 2); StringReplace(strTotalMes, ".", ",");
    string strPontosMes = DoubleToString(totalPontosMes, 0); StringReplace(strPontosMes, ".", ",");
    string textoTotalMes = StringFormat("PnL Mensal: R$ %s | %s pts | Operações: %d", strTotalMes, strPontosMes, CalcularOperacoesDoMes());
-   color corTotalMes = (totalDoMes > 0.0) ? C'6,136,6' : (totalDoMes < 0.0 ? clrRed : clrSilver);
+   color corTotalMes = (totalDoMes > 0.0) ? clrLimeGreen : (totalDoMes < 0.0 ? clrRed : clrSilver);
 
    StructFase faseInfo = TabelaFases[faseAtual];
    string strLossDiario = DoubleToString(faseInfo.lossDiario, 2); StringReplace(strLossDiario, ".", ",");
@@ -769,7 +769,7 @@ void AtualizarPainelVisualEmTempoReal()
    CriarTextoLabel(PREFIX_TXT+"8", textoFaseLabel, margemDireita, 65, 9, clrDodgerBlue, cantoPainelAtual);
    CriarTextoLabel(PREFIX_TXT+"9", textoLoteMax, margemDireita, 80, 9, clrMediumSeaGreen, cantoPainelAtual);
    CriarTextoLabel(PREFIX_TXT+"10", textoLFT, margemDireita, 95, 9, clrOrange, cantoPainelAtual);
-   CriarTextoLabel(PREFIX_TXT+"11", textoAcumProg, margemDireita, 110, 9, C'6,136,6', cantoPainelAtual);
+   CriarTextoLabel(PREFIX_TXT+"11", textoAcumProg, margemDireita, 110, 9, clrLimeGreen, cantoPainelAtual);
    CriarTextoLabel(PREFIX_TXT+"12", textoAcumReg, margemDireita, 125, 9, clrTomato, cantoPainelAtual);
    CriarTextoLabel(PREFIX_TXT+"4", textoAlvosFase, margemDireita, 140, 9, clrSteelBlue, cantoPainelAtual);
    CriarTextoLabel(PREFIX_TXT+"1", "-----------------------------------------------------------------------------------------", margemDireita, 153, 9, clrSilver, cantoPainelAtual);
