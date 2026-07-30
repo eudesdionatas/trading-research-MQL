@@ -13,9 +13,6 @@ input group "--- Configurações Operacionais ---"
 input int               InpFaseInicial     = 1;           // Fase Inicial do Trader (1 a 10)
 input int               InpMaxNegociosDia  = 3;           // Máximo de Negócios por Dia
 
-input group "--- Configuração do Indicador Volatilidade ---"
-input int               InpATRPeriod       = 14;        // Período do ATR utilizado na fórmula
-
 const string PREFIX_OBJ = "Proj_";
 const string PREFIX_TXT = "Painel_";
 const string LABEL_PRECO_POSICAO = "LABEL_PRECO_POSICAO";
@@ -24,7 +21,6 @@ const string LABEL_PRECO_POSICAO = "LABEL_PRECO_POSICAO";
 int  faseAtual = 1;
 bool operacaoPendente = false;
 int  tipoOperacao = 0; // 1 = Compra, 2 = Venda
-int  handleATR;        
 string globalMensagemStatus = "(C) Compra | (V) Venda | (Enter) Envia | (CTRL+Enter) Zera";
 bool posicaoEstavaAberta = false; 
 
@@ -67,13 +63,6 @@ int OnInit()
 {
    faseAtual = MathMin(10, MathMax(1, InpFaseInicial));
 
-   handleATR = iATR(_Symbol, _Period, InpATRPeriod);
-   if(handleATR == INVALID_HANDLE)
-   {
-      Print("[ERRO] Falha ao inicializar o indicador ATR.");
-      return(INIT_FAILED);
-   }
-
    EventSetMillisecondTimer(50);
 
    for(int i=0; i<15; i++) ObjectDelete(0, PREFIX_TXT+IntegerToString(i));
@@ -94,7 +83,6 @@ int OnInit()
 void OnDeinit(const int reason)
 {
    EventKillTimer();
-   IndicatorRelease(handleATR);
    ApagarLinhasProjecao();
    Comment("");
    
@@ -224,28 +212,15 @@ double ArredondarParaPassoDoPreco(double pontos)
    return MathRound(pontos / tickSize) * tickSize;
 }
 
-double ObterValorATR()
-{
-   double atrBuffer[1];
-   if(CopyBuffer(handleATR, 0, 0, 1, atrBuffer) < 1) return 1.0;
-   return atrBuffer[0] / _Point;
-}
-
 double ObterPontosAlvosFase(double &slOut, double &tpOut)
 {
-   double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
-   double tickSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
-   if(tickValue <= 0) tickValue = 1.0;
+   // Os alvos SL/TP em pontos são o próprio Loss/Gain da fase (mesmo número),
+   // sem conversão por tick value/lote — nada de Acúmulo Progressivo/Regressivo aqui.
+   double pontosLoss = MathAbs(TabelaFases[faseAtual].lossDiario);
+   double pontosGain = TabelaFases[faseAtual].gainDiario;
 
-   double financeiroLoss = MathAbs(TabelaFases[faseAtual].lossDiario);
-   double financeiroGain = MathAbs(TabelaFases[faseAtual].gainDiario);
-   int loteMaximo = TabelaFases[faseAtual].loteMax;
-
-   double pontosLossTotal = (financeiroLoss / (tickValue * loteMaximo)) * (tickSize / _Point);
-   double pontosGainTotal = (financeiroGain / (tickValue * loteMaximo)) * (tickSize / _Point);
-
-   slOut = ArredondarParaPassoDoPreco(MathMax(50.0, pontosLossTotal / 3.0));
-   tpOut = ArredondarParaPassoDoPreco(MathMax(50.0, pontosGainTotal / 3.0));
+   slOut = ArredondarParaPassoDoPreco(pontosLoss);
+   tpOut = ArredondarParaPassoDoPreco(pontosGain);
    return slOut;
 }
 
