@@ -5,7 +5,7 @@
 //|  - Somente os candles que atendem as condicoes são pintados;      |
 //|  - O candles do outros timframes também são coloridos             |
 //|  - os demais ficam com a cor nativa do grafico (não são tocados). |
-//|  - Alerta sonoro somente quando o grafico atual está em M15.      |
+//|  - Alerta sonoro somente quando o gráfico atual está em M15.      |
 //+------------------------------------------------------------------+
 #property copyright "Custom Indicator"
 #property version   "1.03"
