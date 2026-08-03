@@ -1,8 +1,8 @@
 //+------------------------------------------------------------------+
-//|         Boleta_Indice_Com_Painel_v2.04.mq5                       |
+//|         Boleta_Indice_Com_Painel_v3.04.mq5                       |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2026"
-#property version   "2.04"
+#property version   "3.04"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -10,8 +10,8 @@ CTrade trade;
 
 //--- Parâmetros de Entrada
 input group "--- Configurações Operacionais ---"
-input int               InpFaseInicial     = 1;           // Fase Inicial do Trader (1 a 10)
-input int               InpMaxNegociosDia  = 3;           // Máximo de Negócios por Dia
+input int               InpFaseInicial       = 1;           // Fase Inicial do Trader (1 a 10)
+input int               InpNegociosDiaInicial = 3;           // Negócios (pares C/V) permitidos por dia - deve ser ímpar
 
 const string PREFIX_OBJ = "Proj_";
 const string PREFIX_TXT = "Painel_";
@@ -22,52 +22,117 @@ int  faseAtual = 1;
 bool operacaoPendente = false;
 int  tipoOperacao = 0; // 1 = Compra, 2 = Venda
 string globalMensagemStatus = "(C) Compra | (V) Venda | (Enter) Envia | (CTRL+Enter) Zera";
-bool posicaoEstavaAberta = false; 
+bool posicaoEstavaAberta = false;
+
+// Controle do som de saída (gain/stop): o fechamento de uma posição (manual ou por SL/TP)
+// nem sempre aparece imediatamente em HistoryDealsTotal() no mesmo tick em que a posição
+// já deixou de existir - por isso o som é tocado de forma assíncrona, com retentativas,
+// e sempre casado com o ticket exato da posição (POSITION_IDENTIFIER), nunca com "o último
+// deal do símbolo" (que poderia pertencer a outra operação).
+ulong ultimoTicketPosicaoAberta = 0;
+double ultimoLucroFlutuantePosicao = 0.0; // fallback: último P&L flutuante conhecido, caso o histórico não sincronize a tempo
+bool  aguardandoSomSaida = false;
+int   tentativasSomSaida = 0;
+const int MAX_TENTATIVAS_SOM_SAIDA = 60; // ~60 * 50ms = 3 segundos antes de usar o fallback
 
 // Variável de controle do canto do painel (Padrão: Superior Direito)
 ENUM_BASE_CORNER cantoPainelAtual = CORNER_RIGHT_UPPER;
 
 // Variáveis das métricas do dia
-double maiorAmplitudeGlobal = 0.0; 
-string horarioMaiorCandle = "";    
-int    totalCandlesDoDia = 0;      
+double maiorAmplitudeGlobal = 0.0;
+string horarioMaiorCandle = "";
+int    totalCandlesDoDia = 0;
 
-// Estrutura de dados para a tabela de Fases
+// Controles de gestão de risco / fase
+int  papeisPorOperacao   = 1;     // "V" - quantidade de papéis usada em cada envio de ordem (<= loteMax da fase)
+int  baseNegociosDia     = 3;     // "E" - quantidade de negócios (pares C/V) configurada pelo usuário (sempre ímpar)
+bool bonusConcedidoHoje  = false; // Controla se o bônus de +1 negócio (dia muito bom / LFT) já foi concedido hoje
+datetime ultimoDiaVerificado = 0;
+
+// Estrutura de dados para a tabela de Fases (agora em PONTOS por operação, não mais total financeiro diário)
 struct StructFase
 {
-   double lossDiario;
-   double gainDiario;
-   int    loteMax;
-   double lft;
-   double acumProg;
-   double acumReg;
+   double gainPontos;   // GAIN (pontos) - alvo de ganho em pontos por operação
+   double lossPontos;   // LOSS (pontos) - alvo de perda em pontos por operação (valor negativo)
+   int    loteMax;       // Lote Max - quantidade máxima de papéis negociáveis no dia (fixo da fase)
 };
 
 // Tabela de Fases baseada na imagem de referência
-StructFase TabelaFases[11] = 
+StructFase TabelaFases[11] =
 {
-   {0.0,    0.0,    0,   0.0,    0.0,       0.0},        // Índice 0 (Não usado)
-   {-50.0,  50.0,   1,  -25.0,   250.0,    -250.0},      // Fase 1
-   {-100.0, 100.0,  2,  -50.0,   500.0,    -500.0},      // Fase 2
-   {-150.0, 150.0,  3,  -75.0,   750.0,    -750.0},      // Fase 3
-   {-168.0, 200.0,  4,  -84.0,   1200.0,   -1200.0},     // Fase 4
-   {-190.0, 250.0,  5,  -95.0,   1250.0,   -1250.0},     // Fase 5
-   {-213.0, 300.0,  6,  -106.5,  1500.0,   -1500.0},     // Fase 6
-   {-234.5, 350.0,  7,  -117.25, 1750.0,   -1750.0},     // Fase 7
-   {-248.0, 400.0,  8,  -124.0,  2000.0,   -2000.0},     // Fase 8
-   {-283.5, 450.0,  9,  -141.75, 2250.0,   -2250.0},     // Fase 9
-   {-305.0, 500.0,  10, -152.5,  2500.0,   -2500.0}      // Fase 10
+   {   0.0,    0.0,  0 },   // Índice 0 (Não usado)
+   {  50.0,  -50.0,  1 },   // Fase 1
+   { 100.0, -100.0,  2 },   // Fase 2
+   { 150.0, -150.0,  3 },   // Fase 3
+   { 200.0, -150.0,  4 },   // Fase 4
+   { 250.0, -200.0,  5 },   // Fase 5
+   { 300.0, -250.0,  6 },   // Fase 6
+   { 350.0, -250.0,  7 },   // Fase 7
+   { 400.0, -300.0,  8 },   // Fase 8
+   { 450.0, -350.0,  9 },   // Fase 9
+   { 500.0, -400.0, 10 }    // Fase 10
 };
 
+//+------------------------------------------------------------------+
+//| Layout do painel                                                 |
+//+------------------------------------------------------------------+
+int LINE_HEIGHT   = 16;
+int BASE_MARGIN   = 20;
+int MARGEM_DIREITA_TEXTO = 400;
+int LARGURA_SEPARADOR = 367; // largura do separador em pixels (independe de fonte/caracteres)
+
+// Retorna a coordenada Y da "linha lógica" i (0..10, onde 0 = linha 1 da especificação).
+// Importante: o MetaTrader já mede o Y a partir do topo quando o canto é superior e a
+// partir da base quando o canto é inferior - ou seja, usar a MESMA fórmula de distância
+// para os dois cantos já produz o espelhamento visual (linha 0 fica perto do topo quando
+// o painel está em cima, e perto da base quando está embaixo). Se invertêssemos a fórmula
+// aqui também, as duas inversões se cancelariam e a ordem visual ficaria idêntica nos dois
+// cantos - foi exatamente o bug reportado.
+int GetLinhaY(int i)
+{
+   return BASE_MARGIN + i * LINE_HEIGHT;
+}
+
+// Converte um deslocamento "para baixo, na tela" em unidades de Y_DISTANCE, considerando
+// que no canto inferior o Y_DISTANCE cresce para CIMA na tela (mede a partir da base) -
+// logo o mesmo deslocamento precisa ter sinal invertido para continuar descendo visualmente.
+int OffsetParaBaixo(int delta)
+{
+   return (cantoPainelAtual == CORNER_RIGHT_UPPER) ? delta : -delta;
+}
+
+void SetObjVisivel(string nome, bool visivel)
+{
+   if(ObjectFind(0, nome) >= 0)
+      ObjectSetInteger(0, nome, OBJPROP_TIMEFRAMES, visivel ? OBJ_ALL_PERIODS : OBJ_NO_PERIODS);
+}
+
+//+------------------------------------------------------------------+
 int OnInit()
 {
    faseAtual = MathMin(10, MathMax(1, InpFaseInicial));
+
+   // Detecta automaticamente o modo de preenchimento (Fill Policy) aceito pela corretora/ativo.
+   // Sem isso, o CTrade usa FOK por padrão, que muitas corretoras/ativos rejeitam silenciosamente
+   // (trade.Buy()/Sell() retorna false e nenhuma ordem é enviada, sem nenhum aviso visível).
+   trade.SetTypeFillingBySymbol(_Symbol);
+   trade.SetDeviationInPoints(10);
+
+   baseNegociosDia = MathMax(1, InpNegociosDiaInicial);
+   if(baseNegociosDia % 2 == 0) baseNegociosDia++; // garante número ímpar
+   papeisPorOperacao = TabelaFases[faseAtual].loteMax;
+   bonusConcedidoHoje = false;
+   ultimoDiaVerificado = 0;
 
    EventSetMillisecondTimer(50);
 
    for(int i=0; i<15; i++) ObjectDelete(0, PREFIX_TXT+IntegerToString(i));
    ObjectDelete(0, "Btn_FaseMenos");
    ObjectDelete(0, "Btn_FaseMais");
+   ObjectDelete(0, "Btn_PapelMenos");
+   ObjectDelete(0, "Btn_PapelMais");
+   ObjectDelete(0, "Btn_NegMenos");
+   ObjectDelete(0, "Btn_NegMais");
    ObjectDelete(0, "Btn_PainelCima");
    ObjectDelete(0, "Btn_PainelBaixo");
 
@@ -85,17 +150,21 @@ void OnDeinit(const int reason)
    EventKillTimer();
    ApagarLinhasProjecao();
    Comment("");
-   
+
    ObjectDelete(0, LABEL_PRECO_POSICAO);
    for(int i=0; i<15; i++) ObjectDelete(0, PREFIX_TXT+IntegerToString(i));
    ObjectDelete(0, "Btn_FaseMenos");
    ObjectDelete(0, "Btn_FaseMais");
+   ObjectDelete(0, "Btn_PapelMenos");
+   ObjectDelete(0, "Btn_PapelMais");
+   ObjectDelete(0, "Btn_NegMenos");
+   ObjectDelete(0, "Btn_NegMais");
    ObjectDelete(0, "Btn_PainelCima");
    ObjectDelete(0, "Btn_PainelBaixo");
    Print("[INFO] Robô descarregado do gráfico.");
 }
 
-void OnTick() 
+void OnTick()
 {
    ProcessarRotinasDeAtualizacao();
 }
@@ -107,6 +176,7 @@ void OnTimer()
 
 void ProcessarRotinasDeAtualizacao()
 {
+   VerificarTrocaDeDia();
    CalcularMetricasDoDia();
 
    if(operacaoPendente)
@@ -115,6 +185,22 @@ void ProcessarRotinasDeAtualizacao()
    }
 
    AtualizarPainelVisualEmTempoReal();
+   ProcessarSomDeSaidaPendente();
+}
+
+void VerificarTrocaDeDia()
+{
+   datetime inicioHoje = iTime(_Symbol, PERIOD_D1, 0);
+   if(inicioHoje != ultimoDiaVerificado)
+   {
+      bonusConcedidoHoje = false;
+      ultimoDiaVerificado = inicioHoje;
+   }
+}
+
+int NegociosDiaEfetivo()
+{
+   return baseNegociosDia + (bonusConcedidoHoje ? 1 : 0);
 }
 
 void OnChartEvent(const int id, const long& lparam, const double& dparam, const string& sparam)
@@ -122,19 +208,41 @@ void OnChartEvent(const int id, const long& lparam, const double& dparam, const 
    if(id == CHARTEVENT_CHART_CHANGE)
    {
       AtualizarLabelGraficoPreco("", clrNONE, false);
-      ProcessarRotinasDeAtualizacao(); 
+      ProcessarRotinasDeAtualizacao();
    }
-   
+
    if(id == CHARTEVENT_OBJECT_CLICK)
    {
       if(sparam == "Btn_FaseMenos")
       {
          if(faseAtual > 1) faseAtual--;
+         papeisPorOperacao = TabelaFases[faseAtual].loteMax;
          ChartRedraw(0);
       }
       else if(sparam == "Btn_FaseMais")
       {
          if(faseAtual < 10) faseAtual++;
+         papeisPorOperacao = TabelaFases[faseAtual].loteMax;
+         ChartRedraw(0);
+      }
+      else if(sparam == "Btn_PapelMenos")
+      {
+         papeisPorOperacao = (int)MathMax(1, papeisPorOperacao - 1);
+         ChartRedraw(0);
+      }
+      else if(sparam == "Btn_PapelMais")
+      {
+         papeisPorOperacao = (int)MathMin(TabelaFases[faseAtual].loteMax, papeisPorOperacao + 1);
+         ChartRedraw(0);
+      }
+      else if(sparam == "Btn_NegMenos")
+      {
+         baseNegociosDia = MathMax(1, baseNegociosDia - 2);
+         ChartRedraw(0);
+      }
+      else if(sparam == "Btn_NegMais")
+      {
+         baseNegociosDia = baseNegociosDia + 2;
          ChartRedraw(0);
       }
       else if(sparam == "Btn_PainelCima")
@@ -148,22 +256,49 @@ void OnChartEvent(const int id, const long& lparam, const double& dparam, const 
          ChartRedraw(0);
       }
    }
-   
+
    if(id == CHARTEVENT_KEYDOWN)
    {
       int tecla = (int)lparam;
 
-      int maxOrdensPermitidas = InpMaxNegociosDia * 2;
+      // Zerar posição (CTRL+ENTER) e cancelar (ESC) precisam sempre funcionar,
+      // mesmo que os limites diários já tenham sido atingidos - por isso são
+      // tratados aqui, antes de qualquer verificação de limite.
+      if(tecla == 13 && !operacaoPendente) // Tecla 'ENTER'
+      {
+         bool ctrlPressionado = (TerminalInfoInteger(TERMINAL_KEYSTATE_CONTROL) < 0);
+         if(ctrlPressionado)
+         {
+            FecharPosicaoAberta();
+            return;
+         }
+      }
+      else if(tecla == 27) // Tecla 'ESC'
+      {
+         ApagarLinhasProjecao();
+         globalMensagemStatus = "Cancelado. Pressione (C) Compra | (V) Venda";
+         return;
+      }
+
+      int E = NegociosDiaEfetivo();
+      int maxOrdensPermitidas = E * 2;
       int operacoesFeitasHoje = CalcularOperacoesDoDia();
       double pnlDiarioAtual = CalcularResultadoFinanceiroDoDia();
 
+      double acumProgAtual = CalcularAcumProg(faseAtual, E, papeisPorOperacao);
+      double acumRegAtual  = CalcularAcumReg(faseAtual, E, papeisPorOperacao);
+      double lftAtual      = CalcularLFT(faseAtual, E, papeisPorOperacao);
+      bool   todosGanhosHoje = TodosTradesForamGain();
+
+      double limiteLossEfetivo = todosGanhosHoje ? (pnlDiarioAtual - lftAtual) : acumRegAtual;
+
       bool limiteOrdensAtingido = (operacoesFeitasHoje >= maxOrdensPermitidas);
-      bool limiteLossAtingido    = (pnlDiarioAtual <= TabelaFases[faseAtual].lossDiario);
-      bool limiteGainAtingido    = (pnlDiarioAtual >= TabelaFases[faseAtual].gainDiario);
+      bool limiteLossAtingido    = (pnlDiarioAtual <= limiteLossEfetivo);
+      bool limiteGainAtingido    = (pnlDiarioAtual >= acumProgAtual);
 
       if(limiteOrdensAtingido || limiteLossAtingido || limiteGainAtingido)
       {
-         globalMensagemStatus = "Basta por hoje!";
+         globalMensagemStatus = "Basta por hoje! (Limite diário atingido)";
          ApagarLinhasProjecao();
          return;
       }
@@ -182,25 +317,9 @@ void OnChartEvent(const int id, const long& lparam, const double& dparam, const 
          AtualizarLinhasCustomizadas();
          globalMensagemStatus = "Modo venda ativo! (ENTER) Envia | (ESC) Cancela";
       }
-      else if(tecla == 13) // Tecla 'ENTER'
+      else if(tecla == 13) // Tecla 'ENTER' (só chega aqui se operacaoPendente == true)
       {
-         if(operacaoPendente)
-         {
-            EnviarOrdemMercado();
-         }
-         else
-         {
-            bool ctrlPressionado = (TerminalInfoInteger(TERMINAL_KEYSTATE_CONTROL) < 0);
-            if(ctrlPressionado)
-            {
-               FecharPosicaoAberta();
-            }
-         }
-      }
-      else if(tecla == 27) // Tecla 'ESC'
-      {
-         ApagarLinhasProjecao();
-         globalMensagemStatus = "Cancelado. Pressione (C) Compra | (V) Venda";
+         EnviarOrdemMercado();
       }
    }
 }
@@ -212,29 +331,107 @@ double ArredondarParaPassoDoPreco(double pontos)
    return MathRound(pontos / tickSize) * tickSize;
 }
 
+// Agora os alvos já são dados diretamente em pontos por operação pela tabela de fases
 double ObterPontosAlvosFase(double &slOut, double &tpOut)
 {
-   // Os alvos SL/TP em pontos são o próprio Loss/Gain da fase (mesmo número),
-   // sem conversão por tick value/lote — nada de Acúmulo Progressivo/Regressivo aqui.
-   double pontosLoss = MathAbs(TabelaFases[faseAtual].lossDiario);
-   double pontosGain = TabelaFases[faseAtual].gainDiario;
-
-   slOut = ArredondarParaPassoDoPreco(pontosLoss);
-   tpOut = ArredondarParaPassoDoPreco(pontosGain);
+   slOut = ArredondarParaPassoDoPreco(MathAbs(TabelaFases[faseAtual].lossPontos));
+   tpOut = ArredondarParaPassoDoPreco(MathAbs(TabelaFases[faseAtual].gainPontos));
    return slOut;
+}
+
+//+------------------------------------------------------------------+
+//| Fórmulas de LFT / Acúmulos - dependem da fase, da quantidade de   |
+//| negócios (E) configurada/permitida para o dia, e da quantidade de |
+//| papéis por operação (V) escolhida pelo usuário - NÃO do Lote Max  |
+//| fixo da fase, que é apenas o teto permitido para V.               |
+//+------------------------------------------------------------------+
+double CalcularAcumProg(int fase, int negociosDia, int papeis)
+{
+   int ceilOrdens2 = (int)MathCeil((negociosDia * 2) / 2.0);
+   return ceilOrdens2 * papeis * 20.0 * (TabelaFases[fase].gainPontos / 50.0);
+}
+
+double CalcularAcumReg(int fase, int negociosDia, int papeis)
+{
+   int ceilOrdens2 = (int)MathCeil((negociosDia * 2) / 2.0);
+   return ceilOrdens2 * papeis * 20.0 * (TabelaFases[fase].lossPontos / 50.0);
+}
+
+double CalcularLFT(int fase, int negociosDia, int papeis)
+{
+   int ceilOrdens2 = (int)MathCeil((negociosDia * 2) / 2.0);
+   return ceilOrdens2 * papeis * 20.0 * ((TabelaFases[fase].lossPontos * -1.0) / 2.0 / 50.0);
+}
+
+// Verifica se todas as operações (pares de entrada/saída) já finalizadas hoje terminaram com ganho
+bool TodosTradesForamGain()
+{
+   datetime inicioDoDia = iTime(_Symbol, PERIOD_D1, 0);
+   HistorySelect(inicioDoDia, TimeCurrent());
+   int totalDeals = HistoryDealsTotal();
+
+   long   posIds[];
+   double posLucro[];
+   ArrayResize(posIds, 0);
+   ArrayResize(posLucro, 0);
+
+   for(int i = 0; i < totalDeals; i++)
+   {
+      ulong ticketDeal = HistoryDealGetTicket(i);
+      if(ticketDeal <= 0) continue;
+      if(HistoryDealGetString(ticketDeal, DEAL_SYMBOL) != _Symbol) continue;
+
+      long entradaDeal = HistoryDealGetInteger(ticketDeal, DEAL_ENTRY);
+      if(entradaDeal != DEAL_ENTRY_OUT && entradaDeal != DEAL_ENTRY_INOUT) continue;
+
+      long posId = HistoryDealGetInteger(ticketDeal, DEAL_POSITION_ID);
+      double resultado = HistoryDealGetDouble(ticketDeal, DEAL_PROFIT)
+                        + HistoryDealGetDouble(ticketDeal, DEAL_SWAP)
+                        + HistoryDealGetDouble(ticketDeal, DEAL_COMMISSION);
+
+      int idx = -1;
+      for(int j = 0; j < ArraySize(posIds); j++)
+      {
+         if(posIds[j] == posId) { idx = j; break; }
+      }
+      if(idx < 0)
+      {
+         ArrayResize(posIds, ArraySize(posIds) + 1);
+         ArrayResize(posLucro, ArraySize(posLucro) + 1);
+         idx = ArraySize(posIds) - 1;
+         posIds[idx] = posId;
+         posLucro[idx] = 0.0;
+      }
+      posLucro[idx] += resultado;
+   }
+
+   int total = ArraySize(posIds);
+   if(total == 0) return false;
+
+   for(int i = 0; i < total; i++)
+      if(posLucro[i] <= 0.0) return false;
+
+   return true;
 }
 
 void EnviarOrdemMercado()
 {
-   int maxOrdensPermitidas = InpMaxNegociosDia * 2;
+   int E = NegociosDiaEfetivo();
+   int maxOrdensPermitidas = E * 2;
    int operacoesFeitasHoje = CalcularOperacoesDoDia();
    double pnlDiarioAtual = CalcularResultadoFinanceiroDoDia();
 
-   if(operacoesFeitasHoje >= maxOrdensPermitidas || 
-      pnlDiarioAtual <= TabelaFases[faseAtual].lossDiario || 
-      pnlDiarioAtual >= TabelaFases[faseAtual].gainDiario)
+   double acumProgAtual = CalcularAcumProg(faseAtual, E, papeisPorOperacao);
+   double acumRegAtual  = CalcularAcumReg(faseAtual, E, papeisPorOperacao);
+   double lftAtual      = CalcularLFT(faseAtual, E, papeisPorOperacao);
+   bool   todosGanhosHoje = TodosTradesForamGain();
+   double limiteLossEfetivo = todosGanhosHoje ? (pnlDiarioAtual - lftAtual) : acumRegAtual;
+
+   if(operacoesFeitasHoje >= maxOrdensPermitidas ||
+      pnlDiarioAtual <= limiteLossEfetivo ||
+      pnlDiarioAtual >= acumProgAtual)
    {
-      globalMensagemStatus = "Basta por hoje!";
+      globalMensagemStatus = "Basta por hoje! (Limites diários atingidos)";
       ApagarLinhasProjecao();
       return;
    }
@@ -242,114 +439,184 @@ void EnviarOrdemMercado()
    double pontosSL = 0, pontosTP = 0;
    ObterPontosAlvosFase(pontosSL, pontosTP);
 
-   int loteFase = TabelaFases[faseAtual].loteMax;
+   int loteParaEnviar = papeisPorOperacao;
+   bool ordemOk = false;
 
-   if(tipoOperacao == 1) 
+   // A ordem é enviada SEM SL/TP - eles são calculados e aplicados logo abaixo, com base
+   // no preço real de EXECUÇÃO da posição (POSITION_PRICE_OPEN), e não no preço de mercado
+   // no instante em que a ordem foi enviada (que pode divergir por slippage/requote).
+   if(tipoOperacao == 1)
    {
-      double precoCompra = NormalizeDouble(SymbolInfoDouble(_Symbol, SYMBOL_ASK), _Digits);
-      double slCompra    = NormalizeDouble(precoCompra - (pontosSL * _Point), _Digits);
-      double tpCompra    = NormalizeDouble(precoCompra + (pontosTP * _Point), _Digits);
-      trade.Buy(loteFase, _Symbol, precoCompra, slCompra, tpCompra, "Compra Fase " + IntegerToString(faseAtual));
+      ordemOk = trade.Buy(loteParaEnviar, _Symbol, 0.0, 0.0, 0.0, "Compra Fase " + IntegerToString(faseAtual));
    }
-   else if(tipoOperacao == 2) 
+   else if(tipoOperacao == 2)
    {
-      double precoVenda = NormalizeDouble(SymbolInfoDouble(_Symbol, SYMBOL_BID), _Digits);
-      double slVenda    = NormalizeDouble(precoVenda + (pontosSL * _Point), _Digits);
-      double tpVenda    = NormalizeDouble(precoVenda - (pontosTP * _Point), _Digits);
-      trade.Sell(loteFase, _Symbol, precoVenda, slVenda, tpVenda, "Venda Fase " + IntegerToString(faseAtual));
+      ordemOk = trade.Sell(loteParaEnviar, _Symbol, 0.0, 0.0, 0.0, "Venda Fase " + IntegerToString(faseAtual));
    }
 
-   ApagarLinhasProjecao();
-   globalMensagemStatus = "Ordem enviada com Lote Max da Fase! Pressione (ESC)";
+   if(ordemOk)
+   {
+      if(PositionSelect(_Symbol))
+      {
+         double precoExecucao = PositionGetDouble(POSITION_PRICE_OPEN);
+         long   tipoPosAberta = PositionGetInteger(POSITION_TYPE);
+         double slFinal = 0, tpFinal = 0;
+
+         if(tipoPosAberta == POSITION_TYPE_BUY)
+         {
+            slFinal = NormalizeDouble(precoExecucao - (pontosSL * _Point), _Digits);
+            tpFinal = NormalizeDouble(precoExecucao + (pontosTP * _Point), _Digits);
+         }
+         else
+         {
+            slFinal = NormalizeDouble(precoExecucao + (pontosSL * _Point), _Digits);
+            tpFinal = NormalizeDouble(precoExecucao - (pontosTP * _Point), _Digits);
+         }
+
+         if(!trade.PositionModify(_Symbol, slFinal, tpFinal))
+         {
+            Print("[ERRO] Ordem executada, mas falhou ao definir SL/TP. Retcode: ", trade.ResultRetcode(),
+                  " - ", trade.ResultRetcodeDescription());
+            globalMensagemStatus = StringFormat("Ordem sem SL/TP! (retcode %d) Verifique manualmente.", trade.ResultRetcode());
+            ApagarLinhasProjecao();
+            return;
+         }
+      }
+
+      ApagarLinhasProjecao();
+      globalMensagemStatus = "Ordem enviada! Pressione (ESC)";
+   }
+   else
+   {
+      Print("[ERRO] Falha ao enviar ordem. Retcode: ", trade.ResultRetcode(),
+            " - ", trade.ResultRetcodeDescription(), " | GetLastError: ", GetLastError());
+      globalMensagemStatus = StringFormat("Falha ao enviar ordem! (retcode %d)", trade.ResultRetcode());
+      ApagarLinhasProjecao();
+   }
 }
 
-void VerificarResultadoETocarSomSaida()
+// Tenta localizar o deal de saída da posição informada (por POSITION_IDENTIFIER) e tocar
+// o som correspondente ao resultado. Retorna true se encontrou (e já tocou o som), ou
+// false se o deal ainda não apareceu no histórico (para tentar de novo no próximo tick).
+// IMPORTANTE: se não encontrar, NÃO toca nenhum som - evita o bug de tocar "stops.wav"
+// por padrão quando o histórico ainda não sincronizou o deal de um TP recém-executado.
+bool TentarTocarSomSaida(ulong ticketPosicao)
 {
    datetime inicioDoDia = iTime(_Symbol, PERIOD_D1, 0);
    HistorySelect(inicioDoDia, TimeCurrent());
    int totalDeals = HistoryDealsTotal();
 
-   double ultimoLucro = 0.0;
-   bool encontrouDealSaida = false;
-
    for(int i = totalDeals - 1; i >= 0; i--)
    {
       ulong ticketDeal = HistoryDealGetTicket(i);
-      if(ticketDeal > 0)
+      if(ticketDeal <= 0) continue;
+      if(HistoryDealGetString(ticketDeal, DEAL_SYMBOL) != _Symbol) continue;
+
+      long entradaDeal = HistoryDealGetInteger(ticketDeal, DEAL_ENTRY);
+      if(entradaDeal != DEAL_ENTRY_OUT && entradaDeal != DEAL_ENTRY_INOUT) continue;
+
+      if(ticketPosicao != 0 && (ulong)HistoryDealGetInteger(ticketDeal, DEAL_POSITION_ID) != ticketPosicao)
+         continue;
+
+      double lucro    = HistoryDealGetDouble(ticketDeal, DEAL_PROFIT);
+      double swap     = HistoryDealGetDouble(ticketDeal, DEAL_SWAP);
+      double comissao = HistoryDealGetDouble(ticketDeal, DEAL_COMMISSION);
+      double resultado = lucro + swap + comissao;
+
+      if(resultado > 0.0)
       {
-         if(HistoryDealGetString(ticketDeal, DEAL_SYMBOL) == _Symbol)
-         {
-            long entradaDeal = HistoryDealGetInteger(ticketDeal, DEAL_ENTRY);
-            if(entradaDeal == DEAL_ENTRY_OUT || entradaDeal == DEAL_ENTRY_INOUT)
-            {
-               double lucro    = HistoryDealGetDouble(ticketDeal, DEAL_PROFIT);
-               double swap     = HistoryDealGetDouble(ticketDeal, DEAL_SWAP);
-               double comissao = HistoryDealGetDouble(ticketDeal, DEAL_COMMISSION);
-               
-               ultimoLucro = lucro + swap + comissao;
-               encontrouDealSaida = true;
-               break;
-            }
-         }
+         if(!PlaySound("gain.wav")) PlaySound("\\Audio\\gain.wav");
       }
+      else
+      {
+         if(!PlaySound("stops.wav")) PlaySound("\\Audio\\stops.wav");
+      }
+      return true;
    }
 
-   if(encontrouDealSaida && ultimoLucro > 0.0)
+   return false;
+}
+
+// Chama esta função a cada tick/timer enquanto aguardandoSomSaida estiver ativo,
+// até localizar o deal (ou desistir após MAX_TENTATIVAS_SOM_SAIDA tentativas).
+void ProcessarSomDeSaidaPendente()
+{
+   if(!aguardandoSomSaida) return;
+
+   if(TentarTocarSomSaida(ultimoTicketPosicaoAberta))
    {
-      if(!PlaySound("gain.wav")) PlaySound("\\Audio\\gain.wav");
+      aguardandoSomSaida = false;
+      return;
    }
-   else
+
+   tentativasSomSaida++;
+   if(tentativasSomSaida >= MAX_TENTATIVAS_SOM_SAIDA)
    {
-      if(!PlaySound("stops.wav")) PlaySound("\\Audio\\stops.wav");
+      Print("[AVISO] Deal de saída da posição ", ultimoTicketPosicaoAberta,
+            " não sincronizou a tempo no histórico - usando o último P&L flutuante conhecido (R$ ",
+            DoubleToString(ultimoLucroFlutuantePosicao, 2), ") como referência para o som.");
+
+      if(ultimoLucroFlutuantePosicao > 0.0)
+      {
+         if(!PlaySound("gain.wav")) PlaySound("\\Audio\\gain.wav");
+      }
+      else
+      {
+         if(!PlaySound("stops.wav")) PlaySound("\\Audio\\stops.wav");
+      }
+      aguardandoSomSaida = false;
    }
 }
 
 void FecharPosicaoAberta()
 {
-   if(PositionSelect(_Symbol)) 
+   if(PositionSelect(_Symbol))
    {
+      ulong ticketAntesDeFechar = PositionGetInteger(POSITION_IDENTIFIER);
       if(trade.PositionClose(_Symbol))
       {
-         VerificarResultadoETocarSomSaida();
+         ultimoTicketPosicaoAberta = ticketAntesDeFechar;
+         aguardandoSomSaida = true;
+         tentativasSomSaida = 0;
          globalMensagemStatus = "(C) Compra | (V) Venda | (Enter) Envia | (CTRL+Enter) Zera";
          posicaoEstavaAberta = false;
       }
    }
    else
    {
-      globalMensagemStatus = "Nenhuma posição aberta";
+      globalMensagemStatus = "(C) Compra | (V) Venda | (Enter) Envia | (CTRL+Enter) Zera";
    }
 }
 
 void CalcularMetricasDoDia()
 {
    datetime inicioDoDia = iTime(_Symbol, PERIOD_D1, 0);
-   if(inicioDoDia == 0) return; 
+   if(inicioDoDia == 0) return;
 
    MqlRates barras[];
-   ArraySetAsSeries(barras, false); 
+   ArraySetAsSeries(barras, false);
    int barrasCopiadas = CopyRates(_Symbol, _Period, inicioDoDia, TimeCurrent(), barras);
-   
+
    if(barrasCopiadas > 0)
    {
       totalCandlesDoDia = barrasCopiadas;
       double maiorAmplitude = 0.0;
       datetime dataHoraCandle = 0;
-      
+
       for(int i = 0; i < barrasCopiadas; i++)
       {
          MqlDateTime dt;
          TimeToStruct(barras[i].time, dt);
          if(dt.hour == 9 && dt.min == 0) continue;
-         
+
          double amplitude = barras[i].high - barras[i].low;
-         if(amplitude > maiorAmplitude) 
+         if(amplitude > maiorAmplitude)
          {
             maiorAmplitude = amplitude;
             dataHoraCandle = barras[i].time;
          }
       }
-      
+
       maiorAmplitudeGlobal = NormalizeDouble(maiorAmplitude / _Point, 0);
       horarioMaiorCandle = TimeToString(dataHoraCandle, TIME_MINUTES);
    }
@@ -374,7 +641,7 @@ double CalcularResultadoFinanceiroDoDia()
             double lucroDeal    = HistoryDealGetDouble(ticketDeal, DEAL_PROFIT);
             double swapDeal     = HistoryDealGetDouble(ticketDeal, DEAL_SWAP);
             double comissaoDeal = HistoryDealGetDouble(ticketDeal, DEAL_COMMISSION);
-            
+
             lucroTotalDia += (lucroDeal + swapDeal + comissaoDeal);
          }
       }
@@ -399,7 +666,7 @@ double CalcularPontosDoPeriodo(datetime tempoInicio)
          {
             double precoSaida = HistoryDealGetDouble(ticketDeal, DEAL_PRICE);
             long posicaoID = HistoryDealGetInteger(ticketDeal, DEAL_POSITION_ID);
-            
+
             for(int j = 0; j < totalDeals; j++)
             {
                ulong ticketEntrada = HistoryDealGetTicket(j);
@@ -409,13 +676,13 @@ double CalcularPontosDoPeriodo(datetime tempoInicio)
                      HistoryDealGetInteger(ticketEntrada, DEAL_ENTRY) == DEAL_ENTRY_IN)
                   {
                      double precoEntrada = HistoryDealGetDouble(ticketEntrada, DEAL_PRICE);
-                     long tipoPos = HistoryDealGetInteger(ticketEntrada, DEAL_TYPE); 
-                     
-                     if(tipoPos == 0) 
+                     long tipoPos = HistoryDealGetInteger(ticketEntrada, DEAL_TYPE);
+
+                     if(tipoPos == 0)
                         totalPontos += (precoSaida - precoEntrada) / _Point;
-                     else             
+                     else
                         totalPontos += (precoEntrada - precoSaida) / _Point;
-                        
+
                      break;
                   }
                }
@@ -489,7 +756,7 @@ double CalcularResultadoFinanceiroDoMes()
             double lucroDeal    = HistoryDealGetDouble(ticketDeal, DEAL_PROFIT);
             double swapDeal     = HistoryDealGetDouble(ticketDeal, DEAL_SWAP);
             double comissaoDeal = HistoryDealGetDouble(ticketDeal, DEAL_COMMISSION);
-            
+
             lucroTotalMes += (lucroDeal + swapDeal + comissaoDeal);
          }
       }
@@ -541,14 +808,14 @@ void DefaultAtualizarLinhasCustomizadas()
    double tpProjetado = 0;
    color corEntrada = clrNONE;
 
-   if(tipoOperacao == 1) 
+   if(tipoOperacao == 1)
    {
       precoReferencia = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
       slProjetado     = precoReferencia - (pontosSL * _Point);
       tpProjetado     = precoReferencia + (pontosTP * _Point);
       corEntrada      = clrDodgerBlue;
    }
-   else if(tipoOperacao == 2) 
+   else if(tipoOperacao == 2)
    {
       precoReferencia = SymbolInfoDouble(_Symbol, SYMBOL_BID);
       slProjetado     = precoReferencia + (pontosSL * _Point);
@@ -593,7 +860,7 @@ void AtualizarLabelGraficoPreco(string texto = "", color cor = clrNONE, bool atu
       long larguraGrafico = ChartGetInteger(ChartID(), CHART_WIDTH_IN_PIXELS);
       int posXDesejada = (int)(larguraGrafico - 75);
       int posXFinal = (x < posXDesejada) ? x + 40 : posXDesejada;
-      int posYFinal = y - 18; 
+      int posYFinal = y - 18;
 
       CriarTextoLabelGrafico(LABEL_PRECO_POSICAO, textoFinal, posXFinal, posYFinal, 9, corFinal);
    }
@@ -607,9 +874,9 @@ void CriarTextoLabelGrafico(string nome, string texto, int x, int y, int tamanho
       ObjectSetInteger(0, nome, OBJPROP_CORNER, CORNER_LEFT_UPPER);
       ObjectSetInteger(0, nome, OBJPROP_SELECTABLE, false);
    }
-   
+
    ObjectSetString(0, nome, OBJPROP_TEXT, texto);
-   ObjectSetInteger(0, nome, OBJPROP_XDISTANCE, x); 
+   ObjectSetInteger(0, nome, OBJPROP_XDISTANCE, x);
    ObjectSetInteger(0, nome, OBJPROP_YDISTANCE, y);
    ObjectSetInteger(0, nome, OBJPROP_FONTSIZE, tamanhoFonte);
    ObjectSetInteger(0, nome, OBJPROP_COLOR, cor);
@@ -634,122 +901,172 @@ void CriarBotaoFase(string nome, string texto, int x, int y, int largura, int al
    ObjectSetInteger(0, nome, OBJPROP_FONTSIZE, 9);
 }
 
+//+------------------------------------------------------------------+
+//| Painel principal - 11 linhas, ordem espelhada conforme o canto   |
+//+------------------------------------------------------------------+
 void AtualizarPainelVisualEmTempoReal()
 {
-   double exSL = 0, exTP = 0;
-   ObterPontosAlvosFase(exSL, exTP);
-   int margemDireita = 360;  
-   
-   string textoPnLPainel = StringFormat("Posição (0 %s)", _Symbol);
-   color corPnL = clrSilver;
-
-   int maxOrdensPermitidas = InpMaxNegociosDia * 2;
+   int E = NegociosDiaEfetivo();
+   int maxOrdensPermitidas = E * 2;
    int operacoesFeitasHoje = CalcularOperacoesDoDia();
    double pnlDiarioAtual = CalcularResultadoFinanceiroDoDia();
-   color corStatus = clrDarkSlateGray;
+
+   double acumProgAtual = CalcularAcumProg(faseAtual, E, papeisPorOperacao);
+   double acumRegAtual  = CalcularAcumReg(faseAtual, E, papeisPorOperacao);
+   double lftAtual       = CalcularLFT(faseAtual, E, papeisPorOperacao);
+   bool   todosGanhosHoje = TodosTradesForamGain();
+
+   // Concede o bônus de +1 negócio uma única vez por dia quando todas as operações forem gain
+   if(todosGanhosHoje && !bonusConcedidoHoje)
+   {
+      bonusConcedidoHoje = true;
+      E = NegociosDiaEfetivo();
+      maxOrdensPermitidas = E * 2;
+   }
+
+   double limiteLossEfetivo = todosGanhosHoje ? (pnlDiarioAtual - lftAtual) : acumRegAtual;
 
    bool limiteOrdensAtingido = (operacoesFeitasHoje >= maxOrdensPermitidas);
-   bool limiteLossAtingido    = (pnlDiarioAtual <= TabelaFases[faseAtual].lossDiario);
-   bool limiteGainAtingido    = (pnlDiarioAtual >= TabelaFases[faseAtual].gainDiario);
+   bool limiteLossAtingido    = (pnlDiarioAtual <= limiteLossEfetivo);
+   bool limiteGainAtingido    = (pnlDiarioAtual >= acumProgAtual);
+   bool algumLimiteAtingido   = (limiteOrdensAtingido || limiteLossAtingido || limiteGainAtingido);
 
-   if(limiteOrdensAtingido || limiteLossAtingido || limiteGainAtingido)
+   if(algumLimiteAtingido)
    {
-      globalMensagemStatus = "Basta por hoje!";
-      corStatus = clrBlack;
+      string motivo = limiteOrdensAtingido ? IntegerToString(maxOrdensPermitidas) + " ordens" :
+                       (limiteGainAtingido ? "ganho" : "perda");
+      globalMensagemStatus = "Basta por hoje! (Limite de " + motivo + " atingido)";
       ApagarLinhasProjecao();
    }
    else
    {
-      if(globalMensagemStatus == "Basta por hoje!" && !PositionSelect(_Symbol))
+      if(globalMensagemStatus.Find("Basta por hoje") >= 0 && !PositionSelect(_Symbol))
       {
          globalMensagemStatus = "(C) Compra | (V) Venda | (Enter) Envia | (CTRL+Enter) Zera";
       }
    }
 
+   // ---- Posição / status do preço na tela ----
+   string textoPosicao = StringFormat("Posição (0 %s)", _Symbol);
+   color corPosicao = clrLightGray;
+
    if(PositionSelect(_Symbol))
    {
-      posicaoEstavaAberta = true; 
-      if(!limiteOrdensAtingido && !limiteLossAtingido && !limiteGainAtingido)
+      posicaoEstavaAberta = true;
+      ultimoTicketPosicaoAberta = PositionGetInteger(POSITION_IDENTIFIER);
+      if(!algumLimiteAtingido)
          globalMensagemStatus = "Ordem executada! (CTRL + Enter) para Zerar";
 
       long tipoPos = PositionGetInteger(POSITION_TYPE);
       double precoAberturaPos = PositionGetDouble(POSITION_PRICE_OPEN);
       double precoAtual = (tipoPos == POSITION_TYPE_BUY) ? SymbolInfoDouble(_Symbol, SYMBOL_BID) : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-      double lucroFinanceiro = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP) + PositionGetDouble(POSITION_COMMISSION);
-      
-      double diffPontos = (tipoPos == POSITION_TYPE_BUY) ? (precoAtual - precoAberturaPos) / _Point : (precoAberturaPos - precoAtual) / _Point;
+      double lucroFinanceiro = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+      ultimoLucroFlutuantePosicao = lucroFinanceiro;
 
       string tipoStr = (tipoPos == POSITION_TYPE_BUY) ? "Compra" : "Venda";
       int volumePos = (int)PositionGetDouble(POSITION_VOLUME);
-      
+      int volumePosSinal = (tipoPos == POSITION_TYPE_BUY) ? volumePos : -volumePos;
+
       string valorFormatado = DoubleToString(lucroFinanceiro, 2);
       StringReplace(valorFormatado, ".", ",");
-      
-      textoPnLPainel = StringFormat("(%s: %d %s) | PnL: R$ %s | %.0f pontos", tipoStr, volumePos, _Symbol, valorFormatado, diffPontos);
-      
-      if(lucroFinanceiro > 0.0) corPnL = clrLimeGreen;
-      else if(lucroFinanceiro < 0.0) corPnL = clrRed;
-      
-      AtualizarLabelGraficoPreco(StringFormat("R$ %s", valorFormatado), corPnL, true);
+
+      textoPosicao = StringFormat("Posição (%d %s)", volumePosSinal, _Symbol);
+      corPosicao = (volumePosSinal > 0) ? clrLimeGreen : (volumePosSinal < 0 ? clrRed : clrLightGray);
+
+      color corPnLGrafico = (lucroFinanceiro > 0.0) ? clrLimeGreen : (lucroFinanceiro < 0.0 ? clrRed : clrLightGray);
+      AtualizarLabelGraficoPreco(StringFormat("R$ %s", valorFormatado), corPnLGrafico, true);
    }
    else
    {
       if(posicaoEstavaAberta)
       {
-         VerificarResultadoETocarSomSaida();
-         if(!limiteOrdensAtingido && !limiteLossAtingido && !limiteGainAtingido)
+         aguardandoSomSaida = true;
+         tentativasSomSaida = 0;
+         if(!algumLimiteAtingido)
             globalMensagemStatus = "(C) Compra | (V) Venda | (Enter) Envia | (CTRL+Enter) Zera";
          posicaoEstavaAberta = false;
       }
       ObjectDelete(0, LABEL_PRECO_POSICAO);
    }
 
-   double totalDoDia = CalcularResultadoFinanceiroDoDia();
+   // ---- PnL diário ----
+   double totalDoDia = pnlDiarioAtual;
    double totalPontosDia = CalcularPontosDoDia();
+   int operacoesDiaCount = operacoesFeitasHoje;
    string strTotalDia = DoubleToString(totalDoDia, 2); StringReplace(strTotalDia, ".", ",");
    string strPontosDia = DoubleToString(totalPontosDia, 0); StringReplace(strPontosDia, ".", ",");
-   string textoTotalDia = StringFormat("PnL Diário: R$ %s | %s pts | Operações: %d/%d", strTotalDia, strPontosDia, operacoesFeitasHoje, maxOrdensPermitidas);
-   color corTotalDia = (totalDoDia > 0.0) ? C'6,136,6' : (totalDoDia < 0.0 ? clrRed : clrSilver);
+   string textoPnLDiario = StringFormat("PnL diário: R$ %s | %s pts | Operações: %d", strTotalDia, strPontosDia, operacoesDiaCount);
+   color corPnLDiario = (totalDoDia > 0.0) ? clrLimeGreen : (totalDoDia < 0.0 ? clrRed : clrLightGray);
 
+   // ---- PnL mensal ----
    double totalDoMes = CalcularResultadoFinanceiroDoMes();
    double totalPontosMes = CalcularPontosDoMes();
    string strTotalMes = DoubleToString(totalDoMes, 2); StringReplace(strTotalMes, ".", ",");
    string strPontosMes = DoubleToString(totalPontosMes, 0); StringReplace(strPontosMes, ".", ",");
-   string textoTotalMes = StringFormat("PnL Mensal: R$ %s | %s pts | Operações: %d", strTotalMes, strPontosMes, CalcularOperacoesDoMes());
-   color corTotalMes = (totalDoMes > 0.0) ? C'6,136,6' : (totalDoMes < 0.0 ? clrRed : clrSilver);
+   string textoPnLMensal = StringFormat("PnL mensal: R$ %s | %s pts | Operações: %d", strTotalMes, strPontosMes, CalcularOperacoesDoMes());
+   color corPnLMensal = (totalDoMes > 0.0) ? clrLimeGreen : (totalDoMes < 0.0 ? clrRed : clrLightGray);
 
-   StructFase faseInfo = TabelaFases[faseAtual];
-   string strLossDiario = DoubleToString(faseInfo.lossDiario, 2); StringReplace(strLossDiario, ".", ",");
-   string strGainDiario = DoubleToString(faseInfo.gainDiario, 2); StringReplace(strGainDiario, ".", ",");
-   string strLFT        = DoubleToString(faseInfo.lft, 2);        StringReplace(strLFT, ".", ",");
-   string strAcumProg   = DoubleToString(faseInfo.acumProg, 2);   StringReplace(strAcumProg, ".", ",");
-   string strAcumReg    = DoubleToString(faseInfo.acumReg, 2);    StringReplace(strAcumReg, ".", ",");
+   // ---- Fase / SL / TP ----
+   double exSL = 0, exTP = 0;
+   ObterPontosAlvosFase(exSL, exTP);
+   string textoFase = StringFormat("Fase %d - SL: %.0f pts | TP: %.0f pts", faseAtual, exSL, exTP);
 
-   string textoFaseLabel   = StringFormat("Fase Atual: %d (Loss: R$ %s | Gain: R$ %s)", faseAtual, strLossDiario, strGainDiario);
-   string textoLoteMax     = StringFormat("Lote Máximo Permitido: %d contratos", faseInfo.loteMax);
-   string textoLFT         = StringFormat("Loss From Top (LFT): R$ %s", strLFT);
-   string textoAcumProg    = StringFormat("Acúmulo Progressivo: R$ %s", strAcumProg);
-   string textoAcumReg     = StringFormat("Acúmulo Regressivo: R$ %s", strAcumReg);
-   string textoAlvosFase   = StringFormat("Alvos da Fase: SL = %.2f pts | TP = %.2f pts", exSL, exTP);
+   // ---- Papéis por operação ----
+   string textoPapeis = StringFormat("Máx papéis por operação: %d", papeisPorOperacao);
 
-   // Criação dos botões de fase e alternância de canto (com setas ▲ e ▼)
-   CriarBotaoFase("Btn_FaseMenos", "-", 95, 95, 25, 18);
-   CriarBotaoFase("Btn_FaseMais",  "+", 65, 95, 25, 18);
-   CriarBotaoFase("Btn_PainelCima",  "▲",95, 120, 25, 18);
-   CriarBotaoFase("Btn_PainelBaixo", "▼", 65, 120, 25, 18);
+   // ---- LFT ----
+   string strLFT = DoubleToString(lftAtual, 2); StringReplace(strLFT, ".", ",");
+   string textoLFT = StringFormat("Loss from top: R$ %s", strLFT);
+   color corLFT = todosGanhosHoje ? clrLimeGreen : clrLightGray;
 
-   CriarTextoLabel(PREFIX_TXT+"5", globalMensagemStatus, margemDireita, 20, 9, corStatus, cantoPainelAtual);
-   CriarTextoLabel(PREFIX_TXT+"6", textoTotalDia, margemDireita, 35, 9, corTotalDia, cantoPainelAtual);
-   CriarTextoLabel(PREFIX_TXT+"7", textoTotalMes, margemDireita, 50, 9, corTotalMes, cantoPainelAtual);
-   CriarTextoLabel(PREFIX_TXT+"8", textoFaseLabel, margemDireita, 65, 9, clrDodgerBlue, cantoPainelAtual);
-   CriarTextoLabel(PREFIX_TXT+"9", textoLoteMax, margemDireita, 80, 9, clrMediumSeaGreen, cantoPainelAtual);
-   CriarTextoLabel(PREFIX_TXT+"10", textoLFT, margemDireita, 95, 9, clrOrange, cantoPainelAtual);
-   CriarTextoLabel(PREFIX_TXT+"11", textoAcumProg, margemDireita, 110, 9, C'6,136,6', cantoPainelAtual);
-   CriarTextoLabel(PREFIX_TXT+"12", textoAcumReg, margemDireita, 125, 9, clrTomato, cantoPainelAtual);
-   CriarTextoLabel(PREFIX_TXT+"4", textoAlvosFase, margemDireita, 140, 9, clrSteelBlue, cantoPainelAtual);
-   CriarTextoLabel(PREFIX_TXT+"1", "-----------------------------------------------------------------------------------------", margemDireita, 153, 9, clrSilver, cantoPainelAtual);
-   CriarTextoLabel(PREFIX_TXT+"0", textoPnLPainel, margemDireita, 166, 9, corPnL, cantoPainelAtual);
-   
+   // ---- Acúmulos ----
+   string strAcumReg  = DoubleToString(acumRegAtual, 2);  StringReplace(strAcumReg, ".", ",");
+   string strAcumProg = DoubleToString(acumProgAtual, 2); StringReplace(strAcumProg, ".", ",");
+   string textoAcumulos = StringFormat("Máx loss: R$ %s | Máx gain: R$ %s", strAcumReg, strAcumProg);
+
+   // ---- Negócios por dia ----
+   string textoNegocios = StringFormat("Negócios por dia: %d", E);
+
+   // Separadores agora são desenhados como retângulos finos (ver CriarSeparador), com
+   // largura controlada por LARGURA_SEPARADOR - veja mais abaixo.
+
+   // ---- Status (linha 11) ----
+   string textoStatus = globalMensagemStatus;
+   color corStatus = algumLimiteAtingido ? clrRed : clrBlack;
+
+   // Índices 0..10 correspondem às linhas 1..11 da especificação, na ordem do painel "em cima".
+   // Quando o painel está embaixo, o próprio canto (CORNER_RIGHT_LOWER) já inverte a
+   // direção em que o Y cresce, espelhando a ordem visual das linhas automaticamente.
+   CriarTextoLabel(PREFIX_TXT+"0",  textoPnLMensal, MARGEM_DIREITA_TEXTO, GetLinhaY(0), 10, corPnLMensal, cantoPainelAtual);
+   CriarSeparador(PREFIX_TXT+"1",   MARGEM_DIREITA_TEXTO, GetLinhaY(1)+OffsetParaBaixo(7), LARGURA_SEPARADOR, clrSilver, cantoPainelAtual);
+   CriarTextoLabel(PREFIX_TXT+"2",  textoFase,       MARGEM_DIREITA_TEXTO, GetLinhaY(2), 10, clrDodgerBlue, cantoPainelAtual);
+   CriarTextoLabel(PREFIX_TXT+"3",  textoPapeis,     MARGEM_DIREITA_TEXTO, GetLinhaY(3), 10, clrDodgerBlue, cantoPainelAtual);
+   CriarTextoLabel(PREFIX_TXT+"4",  textoLFT,        MARGEM_DIREITA_TEXTO, GetLinhaY(4), 10, corLFT, cantoPainelAtual);
+   CriarTextoLabel(PREFIX_TXT+"5",  textoAcumulos,   MARGEM_DIREITA_TEXTO, GetLinhaY(5), 10, clrSteelBlue, cantoPainelAtual);
+   CriarTextoLabel(PREFIX_TXT+"6",  textoNegocios,   MARGEM_DIREITA_TEXTO, GetLinhaY(6), 10, clrSteelBlue, cantoPainelAtual);
+   CriarSeparador(PREFIX_TXT+"7",   MARGEM_DIREITA_TEXTO, GetLinhaY(7)+OffsetParaBaixo(7), LARGURA_SEPARADOR, clrSilver, cantoPainelAtual);
+   CriarTextoLabel(PREFIX_TXT+"8",  textoPnLDiario,  MARGEM_DIREITA_TEXTO, GetLinhaY(8), 10, corPnLDiario, cantoPainelAtual);
+   CriarTextoLabel(PREFIX_TXT+"9",  textoPosicao,    MARGEM_DIREITA_TEXTO, GetLinhaY(9), 10, corPosicao, cantoPainelAtual);
+   CriarTextoLabel(PREFIX_TXT+"10", textoStatus,     MARGEM_DIREITA_TEXTO, GetLinhaY(10), 10, corStatus, cantoPainelAtual);
+
+   // Botões da linha 3 (índice 2) - troca de fase
+   CriarBotaoFase("Btn_FaseMenos", "-", 100, GetLinhaY(2), 28, 16);
+   CriarBotaoFase("Btn_FaseMais",  "+", 60,  GetLinhaY(2), 28, 16);
+
+   // Botões da linha 4 (índice 3) - papéis por operação
+   CriarBotaoFase("Btn_PapelMenos", "-", 100, GetLinhaY(3), 28, 16);
+   CriarBotaoFase("Btn_PapelMais",  "+", 60,  GetLinhaY(3), 28, 16);
+
+   // Botões da linha 7 (índice 6) - negócios por dia (+2/-2)
+   CriarBotaoFase("Btn_NegMenos", "-2", 100, GetLinhaY(6), 28, 16);
+   CriarBotaoFase("Btn_NegMais",  "+2", 60,  GetLinhaY(6), 28, 16);
+
+   // Botões da linha 9 (índice 8) - mover painel para cima/baixo (apenas um visível por vez)
+   CriarBotaoFase("Btn_PainelBaixo", "▼", 60, GetLinhaY(8), 28, 16);
+   CriarBotaoFase("Btn_PainelCima",  "▲", 60, GetLinhaY(8), 28, 16);
+   SetObjVisivel("Btn_PainelBaixo", cantoPainelAtual == CORNER_RIGHT_UPPER);
+   SetObjVisivel("Btn_PainelCima",  cantoPainelAtual == CORNER_RIGHT_LOWER);
+
    ChartRedraw(0);
 }
 
@@ -760,15 +1077,37 @@ void CriarTextoLabel(string nome, string texto, int x, int y, int tamanhoFonte, 
       ObjectCreate(0, nome, OBJ_LABEL, 0, 0, 0);
       ObjectSetInteger(0, nome, OBJPROP_SELECTABLE, false);
    }
-   
+
    ObjectSetInteger(0, nome, OBJPROP_CORNER, canto);
    ObjectSetString(0, nome, OBJPROP_TEXT, texto);
-   ObjectSetInteger(0, nome, OBJPROP_XDISTANCE, x); 
+   ObjectSetInteger(0, nome, OBJPROP_XDISTANCE, x);
    ObjectSetInteger(0, nome, OBJPROP_YDISTANCE, y);
    ObjectSetInteger(0, nome, OBJPROP_FONTSIZE, tamanhoFonte);
    ObjectSetInteger(0, nome, OBJPROP_COLOR, cor);
-   ObjectSetString(0, nome, OBJPROP_FONT, "Arial Black");
+   ObjectSetString(0, nome, OBJPROP_FONT, "Arial");
    ObjectSetInteger(0, nome, OBJPROP_BACK, true);
+}
+
+// Separador desenhado como um retângulo fino (OBJ_RECTANGLE_LABEL), com largura em pixels
+// controlada diretamente pelo parâmetro "largura" - não depende de fonte nem de caracteres,
+// e por isso não sofre o corte (clipping) que acontecia com a string de traços.
+void CriarSeparador(string nome, int x, int y, int largura, color cor, ENUM_BASE_CORNER canto)
+{
+   if(ObjectFind(0, nome) < 0)
+   {
+      ObjectCreate(0, nome, OBJ_RECTANGLE_LABEL, 0, 0, 0);
+      ObjectSetInteger(0, nome, OBJPROP_SELECTABLE, false);
+      ObjectSetInteger(0, nome, OBJPROP_BACK, false);
+      ObjectSetInteger(0, nome, OBJPROP_BORDER_TYPE, BORDER_FLAT);
+   }
+
+   ObjectSetInteger(0, nome, OBJPROP_CORNER, canto);
+   ObjectSetInteger(0, nome, OBJPROP_XDISTANCE, x);
+   ObjectSetInteger(0, nome, OBJPROP_YDISTANCE, y);
+   ObjectSetInteger(0, nome, OBJPROP_XSIZE, largura);
+   ObjectSetInteger(0, nome, OBJPROP_YSIZE, 1);
+   ObjectSetInteger(0, nome, OBJPROP_BGCOLOR, cor);
+   ObjectSetInteger(0, nome, OBJPROP_COLOR, cor);
 }
 
 void DesenharLinhaH(string nome, double preco, color cor, ENUM_LINE_STYLE estilo, int largura)
