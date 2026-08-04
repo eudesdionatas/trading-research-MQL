@@ -1,8 +1,8 @@
 //+------------------------------------------------------------------+
-//|         Boleta_Indice_Com_Painel_v3.07.mq5                       |
+//|         Boleta_Indice_Com_Painel_v3.08.mq5                       |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2026"
-#property version   "3.07"
+#property version   "3.08"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -115,7 +115,7 @@ StructFase TabelaFases[11] =
 int LINE_HEIGHT   = 16;
 int BASE_MARGIN   = 20;
 int MARGEM_DIREITA_TEXTO = 400;
-int LARGURA_SEPARADOR = 368; // largura do separador em pixels (independe de fonte/caracteres)
+int LARGURA_SEPARADOR = 369; // largura do separador em pixels (independe de fonte/caracteres)
 
 // Retorna a coordenada Y da "linha lógica" i (0..10, onde 0 = linha 1 da especificação).
 // Importante: o MetaTrader já mede o Y a partir do topo quando o canto é superior e a
@@ -389,6 +389,34 @@ double ObterPontosAlvosFase(double &slOut, double &tpOut)
    return slOut;
 }
 
+// Igual a ObterPontosAlvosFase(), mas também trava o SL pelo LFT quando a próxima ordem
+// for a "operação-bônus" concedida por já ter acertado todos os trades do dia - usado
+// tanto na linha de projeção (antes de enviar) quanto no envio real da ordem, para que
+// a prévia mostrada na tela sempre bata com o que será efetivamente enviado.
+double ObterPontosAlvosEfetivos(double &slOut, double &tpOut, bool &ehOperacaoBonus)
+{
+   ObterPontosAlvosFase(slOut, tpOut);
+   ehOperacaoBonus = false;
+
+   int E = NegociosDiaEfetivo();
+   int operacoesFeitasHoje = CalcularOperacoesDoDia();
+   bool todosGanhosHoje = TodosTradesForamGain();
+
+   ehOperacaoBonus = (todosGanhosHoje && bonusConcedidoHoje && operacoesFeitasHoje >= (baseNegociosDia * 2));
+
+   if(ehOperacaoBonus && papeisPorOperacao > 0)
+   {
+      double lftAtual = CalcularLFT(faseAtual, E, papeisPorOperacao);
+      double valorPorPontoPorLote = 0.20; // R$ por ponto por papel (mesma constante das fórmulas de Acúmulo/LFT)
+      double pontosMaxPermitidoPeloLFT = MathFloor(lftAtual / (papeisPorOperacao * valorPorPontoPorLote));
+
+      if(pontosMaxPermitidoPeloLFT > 0 && pontosMaxPermitidoPeloLFT < slOut)
+         slOut = ArredondarParaPassoDoPreco(pontosMaxPermitidoPeloLFT);
+   }
+
+   return slOut;
+}
+
 //+------------------------------------------------------------------+
 //| Fórmulas de LFT / Acúmulos - dependem da fase, da quantidade de   |
 //| negócios (E) configurada/permitida para o dia, e da quantidade de |
@@ -489,7 +517,15 @@ void EnviarOrdemMercado()
    }
 
    double pontosSL = 0, pontosTP = 0;
-   ObterPontosAlvosFase(pontosSL, pontosTP);
+   bool operacaoBonusLFT = false;
+   ObterPontosAlvosEfetivos(pontosSL, pontosTP, operacaoBonusLFT);
+
+   if(operacaoBonusLFT)
+   {
+      Print("[LFT] Operação-bônus: SL travado em ", pontosSL, " pts (normal da fase seria ",
+            TabelaFases[faseAtual].lossPontos, " pts) para não ultrapassar o LFT de R$ ",
+            DoubleToString(lftAtual, 2), ".");
+   }
 
    int loteParaEnviar = papeisPorOperacao;
    bool ordemOk = false;
@@ -536,7 +572,7 @@ void EnviarOrdemMercado()
       }
 
       ApagarLinhasProjecao();
-      globalMensagemStatus = "Ordem enviada! Pressione (ESC)";
+      globalMensagemStatus = operacaoBonusLFT ? "Ordem bônus (LFT)! SL travado. (ESC)" : "Ordem enviada! Pressione (ESC)";
    }
    else
    {
@@ -853,7 +889,8 @@ int CalcularOperacoesDoMes()
 void DefaultAtualizarLinhasCustomizadas()
 {
    double pontosSL = 0, pontosTP = 0;
-   ObterPontosAlvosFase(pontosSL, pontosTP);
+   bool operacaoBonusLFT = false;
+   ObterPontosAlvosEfetivos(pontosSL, pontosTP, operacaoBonusLFT);
 
    double precoReferencia = 0;
    double slProjetado = 0;
