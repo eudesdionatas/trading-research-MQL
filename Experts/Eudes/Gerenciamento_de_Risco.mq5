@@ -1,8 +1,8 @@
 //+------------------------------------------------------------------+
-//|         Boleta_Indice_Com_Painel_v3.04.mq5                       |
+//|         Boleta_Indice_Com_Painel_v3.07.mq5                       |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2026"
-#property version   "3.04"
+#property version   "3.07"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -49,6 +49,42 @@ int  baseNegociosDia     = 3;     // "E" - quantidade de negócios (pares C/V) c
 bool bonusConcedidoHoje  = false; // Controla se o bônus de +1 negócio (dia muito bom / LFT) já foi concedido hoje
 datetime ultimoDiaVerificado = 0;
 
+// Prefixo das variáveis globais do terminal usadas para persistir o estado configurado pelo
+// usuário (fase, papéis, negócios/dia, canto do painel) através de trocas de timeframe/símbolo
+// no gráfico, que forçam o MetaTrader a descarregar e recarregar o EA (OnDeinit -> OnInit).
+// Variáveis globais do terminal (GlobalVariable) sobrevivem a esse ciclo, diferente das
+// variáveis normais do EA, que voltariam ao valor dos inputs a cada reinício.
+string PrefixoEstadoPersistente()
+{
+   return "GR_EstadoFases_" + _Symbol + "_" + IntegerToString(ChartID()) + "_";
+}
+
+void SalvarEstadoPersistente()
+{
+   string p = PrefixoEstadoPersistente();
+   GlobalVariableSet(p + "fase", (double)faseAtual);
+   GlobalVariableSet(p + "papeis", (double)papeisPorOperacao);
+   GlobalVariableSet(p + "negocios", (double)baseNegociosDia);
+   GlobalVariableSet(p + "canto", (double)cantoPainelAtual);
+}
+
+void CarregarEstadoPersistente()
+{
+   string p = PrefixoEstadoPersistente();
+
+   if(GlobalVariableCheck(p + "fase"))
+      faseAtual = (int)GlobalVariableGet(p + "fase");
+
+   if(GlobalVariableCheck(p + "negocios"))
+      baseNegociosDia = (int)GlobalVariableGet(p + "negocios");
+
+   if(GlobalVariableCheck(p + "papeis"))
+      papeisPorOperacao = (int)GlobalVariableGet(p + "papeis");
+
+   if(GlobalVariableCheck(p + "canto"))
+      cantoPainelAtual = (ENUM_BASE_CORNER)(int)GlobalVariableGet(p + "canto");
+}
+
 // Estrutura de dados para a tabela de Fases (agora em PONTOS por operação, não mais total financeiro diário)
 struct StructFase
 {
@@ -79,7 +115,7 @@ StructFase TabelaFases[11] =
 int LINE_HEIGHT   = 16;
 int BASE_MARGIN   = 20;
 int MARGEM_DIREITA_TEXTO = 400;
-int LARGURA_SEPARADOR = 367; // largura do separador em pixels (independe de fonte/caracteres)
+int LARGURA_SEPARADOR = 368; // largura do separador em pixels (independe de fonte/caracteres)
 
 // Retorna a coordenada Y da "linha lógica" i (0..10, onde 0 = linha 1 da especificação).
 // Importante: o MetaTrader já mede o Y a partir do topo quando o canto é superior e a
@@ -123,6 +159,12 @@ int OnInit()
    papeisPorOperacao = TabelaFases[faseAtual].loteMax;
    bonusConcedidoHoje = false;
    ultimoDiaVerificado = 0;
+
+   // Restaura fase, papéis, negócios/dia e canto do painel de uma sessão anterior neste
+   // mesmo gráfico, se existirem - assim uma troca de timeframe (que reinicia o EA) não
+   // reseta o que o usuário configurou nos botões. Os valores acima servem só de padrão
+   // para a primeira vez que o robô roda neste gráfico.
+   CarregarEstadoPersistente();
 
    EventSetMillisecondTimer(50);
 
@@ -217,42 +259,50 @@ void OnChartEvent(const int id, const long& lparam, const double& dparam, const 
       {
          if(faseAtual > 1) faseAtual--;
          papeisPorOperacao = TabelaFases[faseAtual].loteMax;
+         SalvarEstadoPersistente();
          ChartRedraw(0);
       }
       else if(sparam == "Btn_FaseMais")
       {
          if(faseAtual < 10) faseAtual++;
          papeisPorOperacao = TabelaFases[faseAtual].loteMax;
+         SalvarEstadoPersistente();
          ChartRedraw(0);
       }
       else if(sparam == "Btn_PapelMenos")
       {
          papeisPorOperacao = (int)MathMax(1, papeisPorOperacao - 1);
+         SalvarEstadoPersistente();
          ChartRedraw(0);
       }
       else if(sparam == "Btn_PapelMais")
       {
          papeisPorOperacao = (int)MathMin(TabelaFases[faseAtual].loteMax, papeisPorOperacao + 1);
+         SalvarEstadoPersistente();
          ChartRedraw(0);
       }
       else if(sparam == "Btn_NegMenos")
       {
          baseNegociosDia = MathMax(1, baseNegociosDia - 2);
+         SalvarEstadoPersistente();
          ChartRedraw(0);
       }
       else if(sparam == "Btn_NegMais")
       {
          baseNegociosDia = baseNegociosDia + 2;
+         SalvarEstadoPersistente();
          ChartRedraw(0);
       }
       else if(sparam == "Btn_PainelCima")
       {
          cantoPainelAtual = CORNER_RIGHT_UPPER;
+         SalvarEstadoPersistente();
          ChartRedraw(0);
       }
       else if(sparam == "Btn_PainelBaixo")
       {
          cantoPainelAtual = CORNER_RIGHT_LOWER;
+         SalvarEstadoPersistente();
          ChartRedraw(0);
       }
    }
@@ -345,22 +395,24 @@ double ObterPontosAlvosFase(double &slOut, double &tpOut)
 //| papéis por operação (V) escolhida pelo usuário - NÃO do Lote Max  |
 //| fixo da fase, que é apenas o teto permitido para V.               |
 //+------------------------------------------------------------------+
+
+// Acúmulo progressivo = (quantidade de negócios determinada pelo usuário) * (papéis) * 10 * (GAIN da fase / 50)
 double CalcularAcumProg(int fase, int negociosDia, int papeis)
 {
-   int ceilOrdens2 = (int)MathCeil((negociosDia * 2) / 2.0);
-   return ceilOrdens2 * papeis * 20.0 * (TabelaFases[fase].gainPontos / 50.0);
+   return negociosDia * papeis * 10.0 * (TabelaFases[fase].gainPontos / 50.0);
 }
 
+// Acúmulo regressivo = (quantidade de negócios determinada pelo usuário) * (papéis) * 10 * (LOSS da fase / 50)
 double CalcularAcumReg(int fase, int negociosDia, int papeis)
 {
-   int ceilOrdens2 = (int)MathCeil((negociosDia * 2) / 2.0);
-   return ceilOrdens2 * papeis * 20.0 * (TabelaFases[fase].lossPontos / 50.0);
+   return negociosDia * papeis * 10.0 * (TabelaFases[fase].lossPontos / 50.0);
 }
 
+// LFT = ((quantidade de negócios do dia / 2) arredondado para BAIXO) * papéis * 20 * ((LOSS da fase * -1) / 2 / 50)
 double CalcularLFT(int fase, int negociosDia, int papeis)
 {
-   int ceilOrdens2 = (int)MathCeil((negociosDia * 2) / 2.0);
-   return ceilOrdens2 * papeis * 20.0 * ((TabelaFases[fase].lossPontos * -1.0) / 2.0 / 50.0);
+   int floorOrdens2 = (int)MathFloor(negociosDia / 2.0);
+   return floorOrdens2 * papeis * 20.0 * ((TabelaFases[fase].lossPontos * -1.0) / 2.0 / 50.0);
 }
 
 // Verifica se todas as operações (pares de entrada/saída) já finalizadas hoje terminaram com ganho
@@ -1050,15 +1102,15 @@ void AtualizarPainelVisualEmTempoReal()
    CriarTextoLabel(PREFIX_TXT+"10", textoStatus,     MARGEM_DIREITA_TEXTO, GetLinhaY(10), 10, corStatus, cantoPainelAtual);
 
    // Botões da linha 3 (índice 2) - troca de fase
-   CriarBotaoFase("Btn_FaseMenos", "-", 100, GetLinhaY(2), 28, 16);
-   CriarBotaoFase("Btn_FaseMais",  "+", 60,  GetLinhaY(2), 28, 16);
+   CriarBotaoFase("Btn_FaseMenos", "-", 89, GetLinhaY(2)-1, 28, 16);
+   CriarBotaoFase("Btn_FaseMais",  "+", 60,  GetLinhaY(2)-1, 28, 16);
 
    // Botões da linha 4 (índice 3) - papéis por operação
-   CriarBotaoFase("Btn_PapelMenos", "-", 100, GetLinhaY(3), 28, 16);
+   CriarBotaoFase("Btn_PapelMenos", "-", 89, GetLinhaY(3), 28, 16);
    CriarBotaoFase("Btn_PapelMais",  "+", 60,  GetLinhaY(3), 28, 16);
 
    // Botões da linha 7 (índice 6) - negócios por dia (+2/-2)
-   CriarBotaoFase("Btn_NegMenos", "-2", 100, GetLinhaY(6), 28, 16);
+   CriarBotaoFase("Btn_NegMenos", "-2", 89, GetLinhaY(6), 28, 16);
    CriarBotaoFase("Btn_NegMais",  "+2", 60,  GetLinhaY(6), 28, 16);
 
    // Botões da linha 9 (índice 8) - mover painel para cima/baixo (apenas um visível por vez)

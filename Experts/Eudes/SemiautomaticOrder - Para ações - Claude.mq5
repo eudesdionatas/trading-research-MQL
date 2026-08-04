@@ -1,8 +1,8 @@
 //+------------------------------------------------------------------+
-//|         Boleta_Acoes_Com_Painel_v3.10.mq5                        |
+//|         Boleta_Acoes_Com_Painel_v3.11.mq5                        |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2026"
-#property version   "3.10"
+#property version   "3.11"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -123,6 +123,18 @@ void LimparObjetosPainel()
 }
 
 //+------------------------------------------------------------------+
+// Trocar o timeframe do gráfico (ou o símbolo, ou recompilar) faz o MT5 descarregar e
+// recarregar o EA (OnDeinit seguido de OnInit) - sem isso, tudo que foi ajustado pelos
+// botões (negócios/dia, quantidade, proporção, canto do painel) voltaria ao valor padrão
+// dos inputs a cada troca de timeframe. Para persistir esses ajustes entre um OnInit e
+// outro (mesmo gráfico), eles são salvos em Variáveis Globais do terminal, amarradas ao
+// ChartID() - assim cada gráfico/instância mantém o próprio estado, sem conflitar com
+// outra instância do robô rodando em outro gráfico.
+string ChaveGlobal(string sufixo)
+{
+   return "BoletaAcoes_" + IntegerToString((long)ChartID()) + "_" + sufixo;
+}
+
 int OnInit()
 {
    // Detecta automaticamente o modo de preenchimento (Fill Policy) aceito pela corretora/ativo.
@@ -132,12 +144,29 @@ int OnInit()
    trade.SetDeviationInPoints(10);
 
    mercadoFracionario = EhMercadoFracionario();
-   papeisPorOperacao  = ValidarQuantidade(InpQuantidadeInicial);
 
-   baseNegociosDia = MathMax(1, InpNegociosDiaInicial);
-   if(baseNegociosDia % 2 == 0) baseNegociosDia++; // garante número ímpar
+   // Restaura os ajustes feitos pelos botões na sessão anterior (se existirem); caso
+   // contrário, usa os valores padrão dos inputs (primeira vez que o robô é carregado).
+   if(GlobalVariableCheck(ChaveGlobal("Papeis")))
+      papeisPorOperacao = ValidarQuantidade((int)GlobalVariableGet(ChaveGlobal("Papeis")));
+   else
+      papeisPorOperacao = ValidarQuantidade(InpQuantidadeInicial);
 
-   proporcaoAtual = InpProporcaoInicial;
+   if(GlobalVariableCheck(ChaveGlobal("NegDia")))
+      baseNegociosDia = (int)GlobalVariableGet(ChaveGlobal("NegDia"));
+   else
+   {
+      baseNegociosDia = MathMax(1, InpNegociosDiaInicial);
+      if(baseNegociosDia % 2 == 0) baseNegociosDia++; // garante número ímpar
+   }
+
+   if(GlobalVariableCheck(ChaveGlobal("Proporcao")))
+      proporcaoAtual = (ENUM_RISK_RATIO)(int)GlobalVariableGet(ChaveGlobal("Proporcao"));
+   else
+      proporcaoAtual = InpProporcaoInicial;
+
+   if(GlobalVariableCheck(ChaveGlobal("Canto")))
+      cantoPainelAtual = ((int)GlobalVariableGet(ChaveGlobal("Canto")) == 1) ? CORNER_RIGHT_LOWER : CORNER_RIGHT_UPPER;
 
    EventSetMillisecondTimer(50);
 
@@ -221,26 +250,31 @@ void OnChartEvent(const int id, const long& lparam, const double& dparam, const 
       if(sparam == "Btn_R11")
       {
          proporcaoAtual = RATIO_1_1;
+         GlobalVariableSet(ChaveGlobal("Proporcao"), (double)proporcaoAtual);
          ChartRedraw(0);
       }
       else if(sparam == "Btn_R22")
       {
          proporcaoAtual = RATIO_2_2;
+         GlobalVariableSet(ChaveGlobal("Proporcao"), (double)proporcaoAtual);
          ChartRedraw(0);
       }
       else if(sparam == "Btn_R33")
       {
          proporcaoAtual = RATIO_3_3;
+         GlobalVariableSet(ChaveGlobal("Proporcao"), (double)proporcaoAtual);
          ChartRedraw(0);
       }
       else if(sparam == "Btn_R21")
       {
          proporcaoAtual = RATIO_2_1;
+         GlobalVariableSet(ChaveGlobal("Proporcao"), (double)proporcaoAtual);
          ChartRedraw(0);
       }
       else if(sparam == "Btn_R31")
       {
          proporcaoAtual = RATIO_3_1;
+         GlobalVariableSet(ChaveGlobal("Proporcao"), (double)proporcaoAtual);
          ChartRedraw(0);
       }
       else if(sparam == "Btn_PapelMenos")
@@ -249,6 +283,7 @@ void OnChartEvent(const int id, const long& lparam, const double& dparam, const 
             papeisPorOperacao = (int)MathMax(1, papeisPorOperacao - 1);
          else
             papeisPorOperacao = (int)MathMax(100, papeisPorOperacao - 100);
+         GlobalVariableSet(ChaveGlobal("Papeis"), (double)papeisPorOperacao);
          ChartRedraw(0);
       }
       else if(sparam == "Btn_PapelMais")
@@ -257,22 +292,26 @@ void OnChartEvent(const int id, const long& lparam, const double& dparam, const 
             papeisPorOperacao = (int)MathMin(99, papeisPorOperacao + 1);
          else
             papeisPorOperacao = papeisPorOperacao + 100;
+         GlobalVariableSet(ChaveGlobal("Papeis"), (double)papeisPorOperacao);
          ChartRedraw(0);
       }
       else if(sparam == "Btn_NegMenos")
       {
          baseNegociosDia = MathMax(1, baseNegociosDia - 2);
+         GlobalVariableSet(ChaveGlobal("NegDia"), (double)baseNegociosDia);
          ChartRedraw(0);
       }
       else if(sparam == "Btn_NegMais")
       {
          baseNegociosDia = baseNegociosDia + 2;
+         GlobalVariableSet(ChaveGlobal("NegDia"), (double)baseNegociosDia);
          ChartRedraw(0);
       }
       else if(sparam == "Btn_PainelCima")
       {
          LimparObjetosPainel();
          cantoPainelAtual = CORNER_RIGHT_UPPER;
+         GlobalVariableSet(ChaveGlobal("Canto"), 0.0);
          AtualizarPainelVisualEmTempoReal();
          ChartRedraw(0);
       }
@@ -280,6 +319,7 @@ void OnChartEvent(const int id, const long& lparam, const double& dparam, const 
       {
          LimparObjetosPainel();
          cantoPainelAtual = CORNER_RIGHT_LOWER;
+         GlobalVariableSet(ChaveGlobal("Canto"), 1.0);
          AtualizarPainelVisualEmTempoReal();
          ChartRedraw(0);
       }
@@ -944,7 +984,7 @@ void AtualizarPainelVisualEmTempoReal()
    CriarTextoLabel(PREFIX_TXT+"3", textoProporcao,  MARGEM_DIREITA_TEXTO, GetLinhaY(3), 10, clrDodgerBlue, cantoPainelAtual);
    CriarTextoLabel(PREFIX_TXT+"4", textoPapeis,     MARGEM_DIREITA_TEXTO, GetLinhaY(4), 10, clrSteelBlue, cantoPainelAtual);
    CriarTextoLabel(PREFIX_TXT+"5", textoNegocios,   MARGEM_DIREITA_TEXTO, GetLinhaY(5), 10, clrSteelBlue, cantoPainelAtual);
-   CriarSeparador(PREFIX_TXT+"6", MARGEM_DIREITA_TEXTO, GetLinhaY(6)+OffsetParaBaixo(7), LARGURA_SEPARADOR, clrSilver, cantoPainelAtual);
+   CriarSeparador(PREFIX_TXT+"6", MARGEM_DIREITA_TEXTO, GetLinhaY(6)+OffsetParaBaixo(8), LARGURA_SEPARADOR, clrSilver, cantoPainelAtual);
    CriarTextoLabel(PREFIX_TXT+"7", textoPnLDiario,  MARGEM_DIREITA_TEXTO, GetLinhaY(7), 10, corPnLDiario, cantoPainelAtual);
    CriarTextoLabel(PREFIX_TXT+"8", textoPosicao,    MARGEM_DIREITA_TEXTO, GetLinhaY(8), 10, corPosicao, cantoPainelAtual);
    CriarTextoLabel(PREFIX_TXT+"9", textoStatus,     MARGEM_DIREITA_TEXTO, GetLinhaY(9), 10, corStatus, cantoPainelAtual);
