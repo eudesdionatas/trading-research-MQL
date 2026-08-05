@@ -896,7 +896,7 @@ void AtualizarPainelVisualEmTempoReal()
 
    // ---- Posição / status do preço na tela ----
    string textoPosicao = StringFormat("Posição (0 %s)", _Symbol);
-   color corPosicao = clrLightGray;
+   color corPosicao = clrDarkGray;
 
    if(PositionSelect(_Symbol))
    {
@@ -917,9 +917,9 @@ void AtualizarPainelVisualEmTempoReal()
       StringReplace(valorFormatado, ".", ",");
 
       textoPosicao = StringFormat("Posição (%d %s)", volumePosSinal, _Symbol);
-      corPosicao = (volumePosSinal > 0) ? clrLimeGreen : (volumePosSinal < 0 ? clrRed : clrLightGray);
+      corPosicao = (volumePosSinal > 0) ? clrLimeGreen : (volumePosSinal < 0 ? clrRed : clrDarkGray);
 
-      color corPnLGrafico = (lucroFinanceiro > 0.0) ? clrLimeGreen : (lucroFinanceiro < 0.0 ? clrRed : clrLightGray);
+      color corPnLGrafico = (lucroFinanceiro > 0.0) ? clrLimeGreen : (lucroFinanceiro < 0.0 ? clrRed : clrDarkGray);
       AtualizarLabelGraficoPreco(StringFormat("R$ %s", valorFormatado), corPnLGrafico, true);
    }
    else
@@ -939,13 +939,13 @@ void AtualizarPainelVisualEmTempoReal()
    double totalDoDia = CalcularResultadoFinanceiroDoDia();
    string strTotalDia = DoubleToString(totalDoDia, 2); StringReplace(strTotalDia, ".", ",");
    string textoPnLDiario = StringFormat("PnL diário: R$ %s | Operações: %d", strTotalDia, operacoesFeitasHoje);
-   color corPnLDiario = (totalDoDia > 0.0) ? clrLimeGreen : (totalDoDia < 0.0 ? clrRed : clrLightGray);
+   color corPnLDiario = (totalDoDia > 0.0) ? clrLimeGreen : (totalDoDia < 0.0 ? clrRed : clrDarkGray);
 
    // ---- PnL mensal ----
    double totalDoMes = CalcularResultadoFinanceiroDoMes();
    string strTotalMes = DoubleToString(totalDoMes, 2); StringReplace(strTotalMes, ".", ",");
    string textoPnLMensal = StringFormat("PnL mensal: R$ %s | Operações: %d", strTotalMes, CalcularOperacoesDoMes());
-   color corPnLMensal = (totalDoMes > 0.0) ? clrLimeGreen : (totalDoMes < 0.0 ? clrRed : clrLightGray);
+   color corPnLMensal = (totalDoMes > 0.0) ? clrLimeGreen : (totalDoMes < 0.0 ? clrRed : clrDarkGray);
 
    // ---- Proporção / SL / TP ----
    double precoRefPainel = ObterPrecoReferenciaAtual();

@@ -2,6 +2,7 @@
 *.log
 *.tmp
 *.bak
+*.chr
 
 # Ignorar executáveis e compilados
 *.exe
