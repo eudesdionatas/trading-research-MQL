@@ -1,8 +1,8 @@
 //+------------------------------------------------------------------+
-//|         Boleta_Indice_Com_Painel_v3.10.mq5                       |
+//|         Boleta_Indice_Com_Painel_v3.11.mq5                       |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2026"
-#property version   "3.10"
+#property version   "3.11"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -491,16 +491,17 @@ double CalcularLFT(int fase, int negociosDia, int papeis)
 }
 
 // Verifica se todas as operações (pares de entrada/saída) já finalizadas hoje terminaram com ganho
-bool TodosTradesForamGain()
+// Agrupa os deals de saída de hoje por posição (POSITION_ID), somando o resultado
+// financeiro de cada uma. Usado tanto por TodosTradesForamGain() quanto por
+// ContarResultadosFechadosHoje(), para não duplicar a lógica de agrupamento.
+void AgruparResultadosFechadosHoje(long &posIds[], double &posLucro[])
 {
+   ArrayResize(posIds, 0);
+   ArrayResize(posLucro, 0);
+
    datetime inicioDoDia = iTime(_Symbol, PERIOD_D1, 0);
    HistorySelect(inicioDoDia, TimeCurrent());
    int totalDeals = HistoryDealsTotal();
-
-   long   posIds[];
-   double posLucro[];
-   ArrayResize(posIds, 0);
-   ArrayResize(posLucro, 0);
 
    for(int i = 0; i < totalDeals; i++)
    {
@@ -531,6 +532,13 @@ bool TodosTradesForamGain()
       }
       posLucro[idx] += resultado;
    }
+}
+
+bool TodosTradesForamGain()
+{
+   long   posIds[];
+   double posLucro[];
+   AgruparResultadosFechadosHoje(posIds, posLucro);
 
    int total = ArraySize(posIds);
    if(total == 0) return false;
@@ -539,6 +547,24 @@ bool TodosTradesForamGain()
       if(posLucro[i] <= 0.0) return false;
 
    return true;
+}
+
+// Conta quantas operações já fechadas hoje terminaram com gain (> 0) e quantas com loss (< 0).
+// Resultado exatamente 0 não entra em nenhuma das duas contagens.
+void ContarResultadosFechadosHoje(int &gains, int &losses)
+{
+   gains = 0;
+   losses = 0;
+
+   long   posIds[];
+   double posLucro[];
+   AgruparResultadosFechadosHoje(posIds, posLucro);
+
+   for(int i = 0; i < ArraySize(posIds); i++)
+   {
+      if(posLucro[i] > 0.0) gains++;
+      else if(posLucro[i] < 0.0) losses++;
+   }
 }
 
 void EnviarOrdemMercado()
@@ -1151,7 +1177,7 @@ void AtualizarPainelVisualEmTempoReal()
 
    // ---- Posição / status do preço na tela ----
    string textoPosicao = StringFormat("Posição (0 %s)", _Symbol);
-   color corPosicao = clrDarkGray;
+   color corPosicao = clrLightGray;
 
    if(PositionSelect(_Symbol))
    {
@@ -1174,9 +1200,9 @@ void AtualizarPainelVisualEmTempoReal()
       StringReplace(valorFormatado, ".", ",");
 
       textoPosicao = StringFormat("Posição (%d %s)", volumePosSinal, _Symbol);
-      corPosicao = (volumePosSinal > 0) ? clrLimeGreen : (volumePosSinal < 0 ? clrRed : clrDarkGray);
+      corPosicao = (volumePosSinal > 0) ? clrLimeGreen : (volumePosSinal < 0 ? clrRed : clrLightGray);
 
-      color corPnLGrafico = (lucroFinanceiro > 0.0) ? clrLimeGreen : (lucroFinanceiro < 0.0 ? clrRed : clrDarkGray);
+      color corPnLGrafico = (lucroFinanceiro > 0.0) ? clrLimeGreen : (lucroFinanceiro < 0.0 ? clrRed : clrLightGray);
       AtualizarLabelGraficoPreco(StringFormat("R$ %s", valorFormatado), corPnLGrafico, true);
    }
    else
@@ -1199,7 +1225,7 @@ void AtualizarPainelVisualEmTempoReal()
    string strTotalDia = DoubleToString(totalDoDia, 2); StringReplace(strTotalDia, ".", ",");
    string strPontosDia = DoubleToString(totalPontosDia, 0); StringReplace(strPontosDia, ".", ",");
    string textoPnLDiario = StringFormat("PnL diário: R$ %s | %s pts | Ordens: %d", strTotalDia, strPontosDia, operacoesDiaCount);
-   color corPnLDiario = (totalDoDia > 0.0) ? clrLimeGreen : (totalDoDia < 0.0 ? clrRed : clrDarkGray);
+   color corPnLDiario = (totalDoDia > 0.0) ? clrLimeGreen : (totalDoDia < 0.0 ? clrRed : clrLightGray);
 
    // ---- PnL mensal ----
    double totalDoMes = CalcularResultadoFinanceiroDoMes();
@@ -1207,7 +1233,7 @@ void AtualizarPainelVisualEmTempoReal()
    string strTotalMes = DoubleToString(totalDoMes, 2); StringReplace(strTotalMes, ".", ",");
    string strPontosMes = DoubleToString(totalPontosMes, 0); StringReplace(strPontosMes, ".", ",");
    string textoPnLMensal = StringFormat("PnL mensal: R$ %s | %s pts | Ordens: %d", strTotalMes, strPontosMes, CalcularOperacoesDoMes());
-   color corPnLMensal = (totalDoMes > 0.0) ? clrLimeGreen : (totalDoMes < 0.0 ? clrRed : clrDarkGray);
+   color corPnLMensal = (totalDoMes > 0.0) ? clrLimeGreen : (totalDoMes < 0.0 ? clrRed : clrLightGray);
 
    // ---- Fase / SL / TP ----
    double exSL = 0, exTP = 0;
@@ -1220,7 +1246,7 @@ void AtualizarPainelVisualEmTempoReal()
    // ---- LFT ----
    string strLFT = DoubleToString(lftAtual, 2); StringReplace(strLFT, ".", ",");
    string textoLFT = StringFormat("Loss from top: R$ %s", strLFT);
-   color corLFT = todosGanhosHoje ? clrLimeGreen : clrDarkGray;
+   color corLFT = todosGanhosHoje ? clrLimeGreen : clrLightGray;
 
    // ---- Acúmulos ----
    string strAcumReg  = DoubleToString(acumRegAtual, 2);  StringReplace(strAcumReg, ".", ",");
@@ -1228,7 +1254,9 @@ void AtualizarPainelVisualEmTempoReal()
    string textoAcumulos = StringFormat("Máx loss: R$ %s | Máx gain: R$ %s", strAcumReg, strAcumProg);
 
    // ---- Negócios por dia ----
-   string textoNegocios = StringFormat("Negócios por dia: %d", E);
+   int gainsFechadosHoje = 0, lossesFechadosHoje = 0;
+   ContarResultadosFechadosHoje(gainsFechadosHoje, lossesFechadosHoje);
+   string textoNegocios = StringFormat("Máx negócios/dia: %d | Fechados: %d gain, %d loss", E, gainsFechadosHoje, lossesFechadosHoje);
 
    // Separadores agora são desenhados como retângulos finos (ver CriarSeparador), com
    // largura controlada por LARGURA_SEPARADOR - veja mais abaixo.
