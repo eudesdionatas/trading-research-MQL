@@ -1,8 +1,8 @@
 //+------------------------------------------------------------------+
-//|         Boleta_Indice_Com_Painel_v3.08.mq5                       |
+//|         Boleta_Indice_Com_Painel_v3.10.mq5                       |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2026"
-#property version   "3.08"
+#property version   "3.10"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -14,6 +14,7 @@ input int               InpFaseInicial       = 1;           // Fase Inicial do T
 input int               InpNegociosDiaInicial = 3;           // Negócios (pares C/V) permitidos por dia - deve ser ímpar
 
 const string PREFIX_OBJ = "Proj_";
+const int NEGOCIOS_DIA_MINIMO = 3; // piso mínimo de "Negócios por dia" - o botão "-2" nunca pode ir abaixo disso
 const string PREFIX_TXT = "Painel_";
 const string LABEL_PRECO_POSICAO = "LABEL_PRECO_POSICAO";
 
@@ -34,6 +35,15 @@ double ultimoLucroFlutuantePosicao = 0.0; // fallback: último P&L flutuante con
 bool  aguardandoSomSaida = false;
 int   tentativasSomSaida = 0;
 const int MAX_TENTATIVAS_SOM_SAIDA = 60; // ~60 * 50ms = 3 segundos antes de usar o fallback
+
+// Watchdog de proteção: guarda o SL/TP (em preço) que DEVERIA estar aplicado na posição
+// aberta pelo robô. A cada ciclo, verifica se a posição ainda tem esse SL/TP - se algo
+// (falha silenciosa do PositionModify, corretora, etc.) tirar a proteção, o robô detecta
+// e tenta reaplicar automaticamente, avisando o usuário.
+double slAlvoPosicaoAtual = 0.0;
+double tpAlvoPosicaoAtual = 0.0;
+int    contadorCiclosSemProtecao = 0;
+const int CICLOS_ENTRE_TENTATIVAS_PROTECAO = 20; // ~20 * 50ms = 1s entre tentativas de reaplicar
 
 // Variável de controle do canto do painel (Padrão: Superior Direito)
 ENUM_BASE_CORNER cantoPainelAtual = CORNER_RIGHT_UPPER;
@@ -76,7 +86,7 @@ void CarregarEstadoPersistente()
       faseAtual = (int)GlobalVariableGet(p + "fase");
 
    if(GlobalVariableCheck(p + "negocios"))
-      baseNegociosDia = (int)GlobalVariableGet(p + "negocios");
+      baseNegociosDia = MathMax(NEGOCIOS_DIA_MINIMO, (int)GlobalVariableGet(p + "negocios"));
 
    if(GlobalVariableCheck(p + "papeis"))
       papeisPorOperacao = (int)GlobalVariableGet(p + "papeis");
@@ -154,7 +164,7 @@ int OnInit()
    trade.SetTypeFillingBySymbol(_Symbol);
    trade.SetDeviationInPoints(10);
 
-   baseNegociosDia = MathMax(1, InpNegociosDiaInicial);
+   baseNegociosDia = MathMax(NEGOCIOS_DIA_MINIMO, InpNegociosDiaInicial);
    if(baseNegociosDia % 2 == 0) baseNegociosDia++; // garante número ímpar
    papeisPorOperacao = TabelaFases[faseAtual].loteMax;
    bonusConcedidoHoje = false;
@@ -165,6 +175,18 @@ int OnInit()
    // reseta o que o usuário configurou nos botões. Os valores acima servem só de padrão
    // para a primeira vez que o robô roda neste gráfico.
    CarregarEstadoPersistente();
+
+   // Se já existe uma posição aberta neste símbolo (ex.: o EA acabou de ser recarregado por
+   // uma troca de timeframe), recupera o SL/TP atual dela como alvo do watchdog de proteção -
+   // sem isso, o watchdog perderia a referência do que deveria estar aplicado.
+   slAlvoPosicaoAtual = 0.0;
+   tpAlvoPosicaoAtual = 0.0;
+   contadorCiclosSemProtecao = 0;
+   if(PositionSelect(_Symbol))
+   {
+      slAlvoPosicaoAtual = PositionGetDouble(POSITION_SL);
+      tpAlvoPosicaoAtual = PositionGetDouble(POSITION_TP);
+   }
 
    EventSetMillisecondTimer(50);
 
@@ -228,6 +250,7 @@ void ProcessarRotinasDeAtualizacao()
 
    AtualizarPainelVisualEmTempoReal();
    ProcessarSomDeSaidaPendente();
+   GarantirProtecaoDaPosicao();
 }
 
 void VerificarTrocaDeDia()
@@ -283,7 +306,7 @@ void OnChartEvent(const int id, const long& lparam, const double& dparam, const 
       }
       else if(sparam == "Btn_NegMenos")
       {
-         baseNegociosDia = MathMax(1, baseNegociosDia - 2);
+         baseNegociosDia = MathMax(NEGOCIOS_DIA_MINIMO, baseNegociosDia - 2);
          SalvarEstadoPersistente();
          ChartRedraw(0);
       }
@@ -389,6 +412,27 @@ double ObterPontosAlvosFase(double &slOut, double &tpOut)
    return slOut;
 }
 
+// Garante que a distância (em pontos) respeita o mínimo exigido pela corretora/símbolo
+// (SYMBOL_TRADE_STOPS_LEVEL). Se o SL/TP calculado pela fase for menor que esse mínimo,
+// o PositionModify() é rejeitado pela corretora - e, sem essa checagem, a posição fica
+// sem proteção real sem que o usuário perceba (foi o que causou o bug relatado).
+double AjustarPontosParaStopsLevel(double pontos)
+{
+   long stopsLevelPontos = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
+   if(stopsLevelPontos <= 0) return pontos;
+
+   double margemSeguranca = 2; // pontos extras de folga além do mínimo exigido
+   double minimoNecessario = stopsLevelPontos + margemSeguranca;
+
+   if(pontos < minimoNecessario)
+   {
+      Print("[AVISO] Distância de ", pontos, " pts é menor que o mínimo da corretora (",
+            stopsLevelPontos, " pts) - ajustando para ", minimoNecessario, " pts.");
+      return minimoNecessario;
+   }
+   return pontos;
+}
+
 // Igual a ObterPontosAlvosFase(), mas também trava o SL pelo LFT quando a próxima ordem
 // for a "operação-bônus" concedida por já ter acertado todos os trades do dia - usado
 // tanto na linha de projeção (antes de enviar) quanto no envio real da ordem, para que
@@ -413,6 +457,9 @@ double ObterPontosAlvosEfetivos(double &slOut, double &tpOut, bool &ehOperacaoBo
       if(pontosMaxPermitidoPeloLFT > 0 && pontosMaxPermitidoPeloLFT < slOut)
          slOut = ArredondarParaPassoDoPreco(pontosMaxPermitidoPeloLFT);
    }
+
+   slOut = AjustarPontosParaStopsLevel(slOut);
+   tpOut = AjustarPontosParaStopsLevel(tpOut);
 
    return slOut;
 }
@@ -561,11 +608,28 @@ void EnviarOrdemMercado()
             tpFinal = NormalizeDouble(precoExecucao - (pontosTP * _Point), _Digits);
          }
 
-         if(!trade.PositionModify(_Symbol, slFinal, tpFinal))
+         // Guarda o alvo de SL/TP desta posição para o watchdog (ProcessarSomDeSaidaPendente
+         // e GarantirProtecaoDaPosicao) continuar garantindo que ele permaneça aplicado -
+         // mesmo que a tentativa abaixo falhe agora, o watchdog vai insistir nos próximos ticks.
+         slAlvoPosicaoAtual = slFinal;
+         tpAlvoPosicaoAtual = tpFinal;
+         contadorCiclosSemProtecao = 0;
+
+         // Até 3 tentativas imediatas (situações transitórias, ex.: preço se moveu entre a
+         // execução e esta chamada); se ainda assim falhar, o watchdog assume a partir daqui.
+         bool slTpOk = false;
+         for(int tentativa = 0; tentativa < 3 && !slTpOk; tentativa++)
          {
-            Print("[ERRO] Ordem executada, mas falhou ao definir SL/TP. Retcode: ", trade.ResultRetcode(),
-                  " - ", trade.ResultRetcodeDescription());
-            globalMensagemStatus = StringFormat("Ordem sem SL/TP! (retcode %d) Verifique manualmente.", trade.ResultRetcode());
+            slTpOk = trade.PositionModify(_Symbol, slFinal, tpFinal);
+            if(!slTpOk) Sleep(150);
+         }
+
+         if(!slTpOk)
+         {
+            Print("[ALERTA] Ordem executada, mas falhou ao definir SL/TP após 3 tentativas. Retcode: ",
+                  trade.ResultRetcode(), " - ", trade.ResultRetcodeDescription(),
+                  " | O robô vai continuar tentando automaticamente até conseguir.");
+            globalMensagemStatus = "ALERTA: Posição SEM SL/TP! Corrigindo automaticamente...";
             ApagarLinhasProjecao();
             return;
          }
@@ -656,6 +720,53 @@ void ProcessarSomDeSaidaPendente()
    }
 }
 
+// Watchdog de proteção: roda a cada ciclo (tick/timer). Se o robô abriu uma posição e
+// definiu um alvo de SL/TP (slAlvoPosicaoAtual/tpAlvoPosicaoAtual), verifica se esse SL/TP
+// ainda está de fato aplicado na posição. Se sumir por qualquer motivo (falha silenciosa
+// anterior, ação externa, etc.), tenta reaplicar automaticamente e alerta o usuário -
+// evita o cenário relatado de uma posição ficar sem proteção nenhuma sem ninguém perceber.
+void GarantirProtecaoDaPosicao()
+{
+   if(slAlvoPosicaoAtual == 0.0 && tpAlvoPosicaoAtual == 0.0) return; // nada a proteger
+
+   if(!PositionSelect(_Symbol))
+   {
+      // Posição já não existe mais (foi fechada) - nada mais a proteger.
+      slAlvoPosicaoAtual = 0.0;
+      tpAlvoPosicaoAtual = 0.0;
+      contadorCiclosSemProtecao = 0;
+      return;
+   }
+
+   double slAtual = PositionGetDouble(POSITION_SL);
+   double tpAtual = PositionGetDouble(POSITION_TP);
+
+   bool faltaSL = (slAlvoPosicaoAtual != 0.0 && slAtual == 0.0);
+   bool faltaTP = (tpAlvoPosicaoAtual != 0.0 && tpAtual == 0.0);
+
+   if(!faltaSL && !faltaTP)
+   {
+      contadorCiclosSemProtecao = 0; // proteção ok, nada a fazer
+      return;
+   }
+
+   contadorCiclosSemProtecao++;
+   if(contadorCiclosSemProtecao % CICLOS_ENTRE_TENTATIVAS_PROTECAO != 0) return; // evita martelar a corretora
+
+   globalMensagemStatus = "ALERTA: Posição SEM SL/TP! Corrigindo automaticamente...";
+
+   if(trade.PositionModify(_Symbol, slAlvoPosicaoAtual, tpAlvoPosicaoAtual))
+   {
+      Print("[PROTEÇÃO] SL/TP reaplicados com sucesso (estavam ausentes na posição).");
+      globalMensagemStatus = "Proteção restaurada! SL/TP reaplicados.";
+   }
+   else
+   {
+      Print("[ALERTA] Posição AINDA SEM SL/TP! Nova tentativa falhou. Retcode: ", trade.ResultRetcode(),
+            " - ", trade.ResultRetcodeDescription(), " | Verifique manualmente!");
+   }
+}
+
 void FecharPosicaoAberta()
 {
    if(PositionSelect(_Symbol))
@@ -666,6 +777,9 @@ void FecharPosicaoAberta()
          ultimoTicketPosicaoAberta = ticketAntesDeFechar;
          aguardandoSomSaida = true;
          tentativasSomSaida = 0;
+         slAlvoPosicaoAtual = 0.0;
+         tpAlvoPosicaoAtual = 0.0;
+         contadorCiclosSemProtecao = 0;
          globalMensagemStatus = "(C) Compra | (V) Venda | (Enter) Envia | (CTRL+Enter) Zera";
          posicaoEstavaAberta = false;
       }
@@ -1084,7 +1198,7 @@ void AtualizarPainelVisualEmTempoReal()
    int operacoesDiaCount = operacoesFeitasHoje;
    string strTotalDia = DoubleToString(totalDoDia, 2); StringReplace(strTotalDia, ".", ",");
    string strPontosDia = DoubleToString(totalPontosDia, 0); StringReplace(strPontosDia, ".", ",");
-   string textoPnLDiario = StringFormat("PnL diário: R$ %s | %s pts | Operações: %d", strTotalDia, strPontosDia, operacoesDiaCount);
+   string textoPnLDiario = StringFormat("PnL diário: R$ %s | %s pts | Ordens: %d", strTotalDia, strPontosDia, operacoesDiaCount);
    color corPnLDiario = (totalDoDia > 0.0) ? clrLimeGreen : (totalDoDia < 0.0 ? clrRed : clrLightGray);
 
    // ---- PnL mensal ----
@@ -1092,7 +1206,7 @@ void AtualizarPainelVisualEmTempoReal()
    double totalPontosMes = CalcularPontosDoMes();
    string strTotalMes = DoubleToString(totalDoMes, 2); StringReplace(strTotalMes, ".", ",");
    string strPontosMes = DoubleToString(totalPontosMes, 0); StringReplace(strPontosMes, ".", ",");
-   string textoPnLMensal = StringFormat("PnL mensal: R$ %s | %s pts | Operações: %d", strTotalMes, strPontosMes, CalcularOperacoesDoMes());
+   string textoPnLMensal = StringFormat("PnL mensal: R$ %s | %s pts | Ordens: %d", strTotalMes, strPontosMes, CalcularOperacoesDoMes());
    color corPnLMensal = (totalDoMes > 0.0) ? clrLimeGreen : (totalDoMes < 0.0 ? clrRed : clrLightGray);
 
    // ---- Fase / SL / TP ----
