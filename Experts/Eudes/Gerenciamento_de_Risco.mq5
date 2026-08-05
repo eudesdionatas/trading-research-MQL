@@ -1177,7 +1177,7 @@ void AtualizarPainelVisualEmTempoReal()
 
    // ---- Posição / status do preço na tela ----
    string textoPosicao = StringFormat("Posição (0 %s)", _Symbol);
-   color corPosicao = clrLightGray;
+   color corPosicao = clrDarkGray;
 
    if(PositionSelect(_Symbol))
    {
@@ -1200,9 +1200,9 @@ void AtualizarPainelVisualEmTempoReal()
       StringReplace(valorFormatado, ".", ",");
 
       textoPosicao = StringFormat("Posição (%d %s)", volumePosSinal, _Symbol);
-      corPosicao = (volumePosSinal > 0) ? clrLimeGreen : (volumePosSinal < 0 ? clrRed : clrLightGray);
+      corPosicao = (volumePosSinal > 0) ? clrLimeGreen : (volumePosSinal < 0 ? clrRed : clrDarkGray);
 
-      color corPnLGrafico = (lucroFinanceiro > 0.0) ? clrLimeGreen : (lucroFinanceiro < 0.0 ? clrRed : clrLightGray);
+      color corPnLGrafico = (lucroFinanceiro > 0.0) ? clrLimeGreen : (lucroFinanceiro < 0.0 ? clrRed : clrDarkGray);
       AtualizarLabelGraficoPreco(StringFormat("R$ %s", valorFormatado), corPnLGrafico, true);
    }
    else
@@ -1225,7 +1225,7 @@ void AtualizarPainelVisualEmTempoReal()
    string strTotalDia = DoubleToString(totalDoDia, 2); StringReplace(strTotalDia, ".", ",");
    string strPontosDia = DoubleToString(totalPontosDia, 0); StringReplace(strPontosDia, ".", ",");
    string textoPnLDiario = StringFormat("PnL diário: R$ %s | %s pts | Ordens: %d", strTotalDia, strPontosDia, operacoesDiaCount);
-   color corPnLDiario = (totalDoDia > 0.0) ? clrLimeGreen : (totalDoDia < 0.0 ? clrRed : clrLightGray);
+   color corPnLDiario = (totalDoDia > 0.0) ? clrLimeGreen : (totalDoDia < 0.0 ? clrRed : clrDarkGray);
 
    // ---- PnL mensal ----
    double totalDoMes = CalcularResultadoFinanceiroDoMes();
@@ -1233,7 +1233,7 @@ void AtualizarPainelVisualEmTempoReal()
    string strTotalMes = DoubleToString(totalDoMes, 2); StringReplace(strTotalMes, ".", ",");
    string strPontosMes = DoubleToString(totalPontosMes, 0); StringReplace(strPontosMes, ".", ",");
    string textoPnLMensal = StringFormat("PnL mensal: R$ %s | %s pts | Ordens: %d", strTotalMes, strPontosMes, CalcularOperacoesDoMes());
-   color corPnLMensal = (totalDoMes > 0.0) ? clrLimeGreen : (totalDoMes < 0.0 ? clrRed : clrLightGray);
+   color corPnLMensal = (totalDoMes > 0.0) ? clrLimeGreen : (totalDoMes < 0.0 ? clrRed : clrDarkGray);
 
    // ---- Fase / SL / TP ----
    double exSL = 0, exTP = 0;
@@ -1246,7 +1246,7 @@ void AtualizarPainelVisualEmTempoReal()
    // ---- LFT ----
    string strLFT = DoubleToString(lftAtual, 2); StringReplace(strLFT, ".", ",");
    string textoLFT = StringFormat("Loss from top: R$ %s", strLFT);
-   color corLFT = todosGanhosHoje ? clrLimeGreen : clrLightGray;
+   color corLFT = todosGanhosHoje ? clrLimeGreen : clrDarkGray;
 
    // ---- Acúmulos ----
    string strAcumReg  = DoubleToString(acumRegAtual, 2);  StringReplace(strAcumReg, ".", ",");

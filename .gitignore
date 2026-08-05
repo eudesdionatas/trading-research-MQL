@@ -3,6 +3,8 @@
 *.tmp
 *.bak
 *.chr
+*.dat
+*.wnd
 
 # Ignorar executáveis e compilados
 *.exe
