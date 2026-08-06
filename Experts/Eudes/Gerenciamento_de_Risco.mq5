@@ -1,8 +1,8 @@
 //+------------------------------------------------------------------+
-//|         Boleta_Indice_Com_Painel_v3.11.mq5                       |
+//|         Boleta_Indice_Com_Painel_v3.12.mq5                       |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2026"
-#property version   "3.11"
+#property version   "3.12"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -361,7 +361,7 @@ void OnChartEvent(const int id, const long& lparam, const double& dparam, const 
       double acumProgAtual = CalcularAcumProg(faseAtual, E, papeisPorOperacao);
       double acumRegAtual  = CalcularAcumReg(faseAtual, E, papeisPorOperacao);
       double lftAtual      = CalcularLFT(faseAtual, E, papeisPorOperacao);
-      bool   todosGanhosHoje = TodosTradesForamGain();
+      bool   todosGanhosHoje = CondicaoAtivacaoLFT(pnlDiarioAtual, acumProgAtual);
 
       double limiteLossEfetivo = todosGanhosHoje ? (pnlDiarioAtual - lftAtual) : acumRegAtual;
 
@@ -567,6 +567,28 @@ void ContarResultadosFechadosHoje(int &gains, int &losses)
    }
 }
 
+// O LFT (e o bônus de +1 negócio que vem junto) só deve ser ativado quando as TRÊS
+// condições abaixo forem verdadeiras ao mesmo tempo:
+//   1) a quantidade de negócios especificada para o dia (baseNegociosDia) já foi
+//      totalmente fechada - não apenas alguns dela;
+//   2) TODAS essas operações fechadas foram gain (nenhum loss no meio);
+//   3) o PnL do dia já alcançou o Máx gain (Acúmulo progressivo) da fase.
+// Antes desta correção, bastava 1 única operação fechada em gain para ativar tudo isso
+// prematuramente, mesmo faltando operações e mesmo sem ter batido o Máx gain.
+bool CondicaoAtivacaoLFT(double pnlDiarioAtual, double acumProgAtual)
+{
+   if(!TodosTradesForamGain()) return false;
+
+   int gains = 0, losses = 0;
+   ContarResultadosFechadosHoje(gains, losses);
+   int totalFechados = gains + losses;
+
+   if(totalFechados < baseNegociosDia) return false;
+   if(pnlDiarioAtual < acumProgAtual) return false;
+
+   return true;
+}
+
 void EnviarOrdemMercado()
 {
    int E = NegociosDiaEfetivo();
@@ -577,7 +599,7 @@ void EnviarOrdemMercado()
    double acumProgAtual = CalcularAcumProg(faseAtual, E, papeisPorOperacao);
    double acumRegAtual  = CalcularAcumReg(faseAtual, E, papeisPorOperacao);
    double lftAtual      = CalcularLFT(faseAtual, E, papeisPorOperacao);
-   bool   todosGanhosHoje = TodosTradesForamGain();
+   bool   todosGanhosHoje = CondicaoAtivacaoLFT(pnlDiarioAtual, acumProgAtual);
    double limiteLossEfetivo = todosGanhosHoje ? (pnlDiarioAtual - lftAtual) : acumRegAtual;
 
    if(operacoesFeitasHoje >= maxOrdensPermitidas ||
@@ -1143,9 +1165,11 @@ void AtualizarPainelVisualEmTempoReal()
    double acumProgAtual = CalcularAcumProg(faseAtual, E, papeisPorOperacao);
    double acumRegAtual  = CalcularAcumReg(faseAtual, E, papeisPorOperacao);
    double lftAtual       = CalcularLFT(faseAtual, E, papeisPorOperacao);
-   bool   todosGanhosHoje = TodosTradesForamGain();
+   bool   todosGanhosHoje = CondicaoAtivacaoLFT(pnlDiarioAtual, acumProgAtual);
 
-   // Concede o bônus de +1 negócio uma única vez por dia quando todas as operações forem gain
+   // Concede o bônus de +1 negócio uma única vez por dia, apenas quando: a quantidade de
+   // negócios especificada para o dia foi totalmente fechada, todos em gain, e o Máx gain
+   // (Acúmulo progressivo) da fase foi efetivamente alcançado.
    if(todosGanhosHoje && !bonusConcedidoHoje)
    {
       bonusConcedidoHoje = true;
