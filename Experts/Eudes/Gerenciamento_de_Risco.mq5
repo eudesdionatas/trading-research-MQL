@@ -1,8 +1,8 @@
 //+------------------------------------------------------------------+
-//|         Boleta_Indice_Com_Painel_v3.12.mq5                       |
+//|         Boleta_Indice_Com_Painel_v3.14.mq5                       |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2026"
-#property version   "3.12"
+#property version   "3.14"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -22,7 +22,19 @@ const string LABEL_PRECO_POSICAO = "LABEL_PRECO_POSICAO";
 int  faseAtual = 1;
 bool operacaoPendente = false;
 int  tipoOperacao = 0; // 1 = Compra, 2 = Venda
-string globalMensagemStatus = "(C) Compra | (V) Venda | (Enter) Envia | (CTRL+Enter) Zera";
+bool usarPrecoDoClique = false;      // true quando a prévia usa um preço de referência diferente do Ask/Bid atual (clique/mouse)
+double precoCliqueReferencia = 0.0;  // preço de referência da prévia (a ordem real ainda é a mercado)
+
+// Controle do modo "armado por modificador": SHIFT (compra) ou CTRL (venda) armam a
+// operação automaticamente enquanto ficam pressionados (sem precisar de clique), e
+// desarmam sozinhos assim que a tecla é solta (detectado por polling - ver
+// ProcessarModificadoresDeArme()). Isso é diferente de C/V, que ficam armados até
+// Enter/ESC/clique, independente do estado de teclas.
+bool armadoPorModificador = false;
+int  modificadorTipoOperacao = 0; // 1 = compra (SHIFT), 2 = venda (CTRL)
+int  ultimoMouseXPixel = -1;
+int  ultimoMouseYPixel = -1;
+string globalMensagemStatus = "(C ou SHIFT) Compra | (V ou CTRL) Venda";
 bool posicaoEstavaAberta = false;
 
 // Controle do som de saída (gain/stop): o fechamento de uma posição (manual ou por SL/TP)
@@ -190,6 +202,12 @@ int OnInit()
 
    EventSetMillisecondTimer(50);
 
+   // Necessário para receber CHARTEVENT_MOUSE_MOVE - usado para a prévia (SHIFT/CTRL)
+   // acompanhar o cursor do mouse pelo gráfico.
+   ChartSetInteger(0, CHART_EVENT_MOUSE_MOVE, true);
+   armadoPorModificador = false;
+   modificadorTipoOperacao = 0;
+
    for(int i=0; i<15; i++) ObjectDelete(0, PREFIX_TXT+IntegerToString(i));
    ObjectDelete(0, "Btn_FaseMenos");
    ObjectDelete(0, "Btn_FaseMais");
@@ -212,6 +230,7 @@ int OnInit()
 void OnDeinit(const int reason)
 {
    EventKillTimer();
+   ChartSetInteger(0, CHART_EVENT_MOUSE_MOVE, false);
    ApagarLinhasProjecao();
    Comment("");
 
@@ -242,6 +261,7 @@ void ProcessarRotinasDeAtualizacao()
 {
    VerificarTrocaDeDia();
    CalcularMetricasDoDia();
+   ProcessarModificadoresDeArme();
 
    if(operacaoPendente)
    {
@@ -334,66 +354,161 @@ void OnChartEvent(const int id, const long& lparam, const double& dparam, const 
    {
       int tecla = (int)lparam;
 
-      // Zerar posição (CTRL+ENTER) e cancelar (ESC) precisam sempre funcionar,
-      // mesmo que os limites diários já tenham sido atingidos - por isso são
-      // tratados aqui, antes de qualquer verificação de limite.
-      if(tecla == 13 && !operacaoPendente) // Tecla 'ENTER'
+      // (CTRL+ENTER) zera a posição aberta, não importa como ela foi armada (C, V ou
+      // SHIFT/CTRL) - tem prioridade sobre "enviar uma nova ordem" sempre que já existir
+      // uma posição aberta. Funciona mesmo com os limites diários já atingidos.
+      if(tecla == 13)
       {
          bool ctrlPressionado = (TerminalInfoInteger(TERMINAL_KEYSTATE_CONTROL) < 0);
-         if(ctrlPressionado)
+         if(ctrlPressionado && PositionSelect(_Symbol))
          {
             FecharPosicaoAberta();
             return;
          }
       }
-      else if(tecla == 27) // Tecla 'ESC'
+
+      if(tecla == 27) // Tecla 'ESC'
       {
          ApagarLinhasProjecao();
-         globalMensagemStatus = "Cancelado. Pressione (C) Compra | (V) Venda";
-         return;
-      }
-
-      int E = NegociosDiaEfetivo();
-      int maxOrdensPermitidas = E * 2;
-      int operacoesFeitasHoje = CalcularOperacoesDoDia();
-      double pnlDiarioAtual = CalcularResultadoFinanceiroDoDia();
-
-      double acumProgAtual = CalcularAcumProg(faseAtual, E, papeisPorOperacao);
-      double acumRegAtual  = CalcularAcumReg(faseAtual, E, papeisPorOperacao);
-      double lftAtual      = CalcularLFT(faseAtual, E, papeisPorOperacao);
-      bool   todosGanhosHoje = CondicaoAtivacaoLFT(pnlDiarioAtual, acumProgAtual);
-
-      double limiteLossEfetivo = todosGanhosHoje ? (pnlDiarioAtual - lftAtual) : acumRegAtual;
-
-      bool limiteOrdensAtingido = (operacoesFeitasHoje >= maxOrdensPermitidas);
-      bool limiteLossAtingido    = (pnlDiarioAtual <= limiteLossEfetivo);
-      bool limiteGainAtingido    = (pnlDiarioAtual >= acumProgAtual);
-
-      if(limiteOrdensAtingido || limiteLossAtingido || limiteGainAtingido)
-      {
-         globalMensagemStatus = "Basta por hoje! (Limite diário atingido)";
-         ApagarLinhasProjecao();
+         globalMensagemStatus = "Cancelado. Pressione (C ou SHIFT) Compra | (V ou CTRL) Venda";
          return;
       }
 
       if(tecla == 67 || tecla == 99) // Tecla 'C'
       {
-         operacaoPendente = true;
-         tipoOperacao = 1;
-         AtualizarLinhasCustomizadas();
-         globalMensagemStatus = "Modo compra ativo! (ENTER) Envia | (ESC) Cancela";
+         if(BloqueadoPorLimiteDiario()) return;
+         ArmarOperacao(1, false, 0.0);
       }
       else if(tecla == 86 || tecla == 118) // Tecla 'V'
       {
-         operacaoPendente = true;
-         tipoOperacao = 2;
-         AtualizarLinhasCustomizadas();
-         globalMensagemStatus = "Modo venda ativo! (ENTER) Envia | (ESC) Cancela";
+         if(BloqueadoPorLimiteDiario()) return;
+         ArmarOperacao(2, false, 0.0);
       }
-      else if(tecla == 13) // Tecla 'ENTER' (só chega aqui se operacaoPendente == true)
+      else if(tecla == 13 && operacaoPendente) // Tecla 'ENTER' - envia a ordem armada (por C, V ou SHIFT/CTRL)
       {
+         if(BloqueadoPorLimiteDiario()) return;
          EnviarOrdemMercado();
       }
+   }
+
+   // O mouse move atualiza a posição da prévia (entrada/loss/gain) para acompanhar o
+   // cursor ENQUANTO a operação estiver armada por SHIFT/CTRL (ver ProcessarModificadoresDeArme).
+   // Precisa de CHART_EVENT_MOUSE_MOVE habilitado no OnInit().
+   if(id == CHARTEVENT_MOUSE_MOVE)
+   {
+      ultimoMouseXPixel = (int)lparam;
+      ultimoMouseYPixel = (int)dparam;
+
+      if(armadoPorModificador && operacaoPendente)
+      {
+         int subJanela = 0;
+         datetime tempoMouse = 0;
+         double precoMouse = 0;
+         if(ChartXYToTimePrice(0, ultimoMouseXPixel, ultimoMouseYPixel, subJanela, tempoMouse, precoMouse) && subJanela == 0)
+         {
+            usarPrecoDoClique = true;
+            precoCliqueReferencia = precoMouse;
+            AtualizarLinhasCustomizadas();
+         }
+      }
+   }
+
+   // Clique esquerdo agora só ENVIA a ordem já armada (por C, V ou SHIFT/CTRL) - não
+   // arma nem posiciona mais nada sozinho. Nota técnica: o MQL5 só expõe eventos de
+   // clique para o botão ESQUERDO; o direito é reservado pela plataforma para o menu
+   // de contexto nativo do gráfico.
+   if(id == CHARTEVENT_CLICK)
+   {
+      if(!operacaoPendente) return;
+      if(BloqueadoPorLimiteDiario()) return;
+      EnviarOrdemMercado();
+   }
+}
+
+// Verifica os limites diários (ordens/loss/gain, já considerando a extensão pelo LFT).
+// Retorna true (e já mostra a mensagem/apaga a prévia) se algo estiver bloqueado -
+// usado antes de armar uma nova operação (C, V, SHIFT/CTRL+clique) ou enviar (ENTER).
+bool BloqueadoPorLimiteDiario()
+{
+   int E = NegociosDiaEfetivo();
+   int maxOrdensPermitidas = E * 2;
+   int operacoesFeitasHoje = CalcularOperacoesDoDia();
+   double pnlDiarioAtual = CalcularResultadoFinanceiroDoDia();
+
+   double acumProgAtual = CalcularAcumProg(faseAtual, E, papeisPorOperacao);
+   double acumRegAtual  = CalcularAcumReg(faseAtual, E, papeisPorOperacao);
+   double lftAtual      = CalcularLFT(faseAtual, E, papeisPorOperacao);
+   bool   todosGanhosHoje = CondicaoAtivacaoLFT(pnlDiarioAtual, acumProgAtual);
+
+   double limiteLossEfetivo = todosGanhosHoje ? (pnlDiarioAtual - lftAtual) : acumRegAtual;
+
+   bool limiteOrdensAtingido = (operacoesFeitasHoje >= maxOrdensPermitidas);
+   bool limiteLossAtingido    = (pnlDiarioAtual <= limiteLossEfetivo);
+   bool limiteGainAtingido    = (pnlDiarioAtual >= acumProgAtual);
+
+   if(limiteOrdensAtingido || limiteLossAtingido || limiteGainAtingido)
+   {
+      globalMensagemStatus = "Basta por hoje! (Limite diário atingido)";
+      ApagarLinhasProjecao();
+      return true;
+   }
+   return false;
+}
+
+// Arma uma operação pendente (compra ou venda) e desenha a prévia. Se usarClique for true,
+// a prévia usa precoClique como referência (posição do mouse no gráfico); caso contrário,
+// usa o preço de mercado atual (Ask/Bid).
+void ArmarOperacao(int tipo, bool usarClique, double precoClique)
+{
+   operacaoPendente = true;
+   tipoOperacao = tipo;
+   usarPrecoDoClique = usarClique;
+   precoCliqueReferencia = usarClique ? precoClique : 0.0;
+
+   AtualizarLinhasCustomizadas();
+
+   string nomeOperacao = (tipo == 1) ? "compra" : "venda";
+   globalMensagemStatus = StringFormat("Modo %s ativo! (ENTER ou clique) Envia | (ESC) Cancela", nomeOperacao);
+}
+
+// Roda a cada ciclo (tick/timer). Detecta SHIFT/CTRL pressionados por polling (o MQL5 não
+// tem evento de "tecla solta"), e arma/desarma automaticamente o modo compra/venda:
+//   - SHIFT pressionado e nada armado por modificador ainda -> arma compra
+//   - CTRL pressionado e nada armado por modificador ainda -> arma venda
+//   - SHIFT e CTRL juntos -> ambíguo, ignora (não arma nada)
+//   - Modificador estava armado e a tecla foi solta -> desarma automaticamente
+// Não interfere com operações armadas por C/V (essas só saem por ENTER/ESC/clique).
+void ProcessarModificadoresDeArme()
+{
+   bool shiftAgora = (TerminalInfoInteger(TERMINAL_KEYSTATE_SHIFT) < 0);
+   bool ctrlAgora   = (TerminalInfoInteger(TERMINAL_KEYSTATE_CONTROL) < 0);
+
+   if(shiftAgora && ctrlAgora) { shiftAgora = false; ctrlAgora = false; } // ambíguo: ignora os dois
+
+   if(!armadoPorModificador)
+   {
+      if(shiftAgora)
+      {
+         if(BloqueadoPorLimiteDiario()) return;
+         ArmarOperacao(1, false, 0.0);
+         armadoPorModificador = true;
+         modificadorTipoOperacao = 1;
+         globalMensagemStatus = "Modo compra ativo (SHIFT)! Clique para enviar | (ESC) Cancela";
+      }
+      else if(ctrlAgora)
+      {
+         if(BloqueadoPorLimiteDiario()) return;
+         ArmarOperacao(2, false, 0.0);
+         armadoPorModificador = true;
+         modificadorTipoOperacao = 2;
+         globalMensagemStatus = "Modo venda ativo (CTRL)! Clique para enviar | (ESC) Cancela";
+      }
+   }
+   else if(!shiftAgora && !ctrlAgora)
+   {
+      // O modificador que armou a operação foi solto - desarma automaticamente.
+      ApagarLinhasProjecao();
+      globalMensagemStatus = "(C ou SHIFT) Compra | (V ou CTRL) Venda";
    }
 }
 
@@ -828,13 +943,13 @@ void FecharPosicaoAberta()
          slAlvoPosicaoAtual = 0.0;
          tpAlvoPosicaoAtual = 0.0;
          contadorCiclosSemProtecao = 0;
-         globalMensagemStatus = "(C) Compra | (V) Venda | (Enter) Envia | (CTRL+Enter) Zera";
+         globalMensagemStatus = "(C ou SHIFT) Compra | (V ou CTRL) Venda";
          posicaoEstavaAberta = false;
       }
    }
    else
    {
-      globalMensagemStatus = "(C) Compra | (V) Venda | (Enter) Envia | (CTRL+Enter) Zera";
+      globalMensagemStatus = "(C ou SHIFT) Compra | (V ou CTRL) Venda";
    }
 }
 
@@ -1061,14 +1176,14 @@ void DefaultAtualizarLinhasCustomizadas()
 
    if(tipoOperacao == 1)
    {
-      precoReferencia = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+      precoReferencia = usarPrecoDoClique ? precoCliqueReferencia : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
       slProjetado     = precoReferencia - (pontosSL * _Point);
       tpProjetado     = precoReferencia + (pontosTP * _Point);
       corEntrada      = clrDodgerBlue;
    }
    else if(tipoOperacao == 2)
    {
-      precoReferencia = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+      precoReferencia = usarPrecoDoClique ? precoCliqueReferencia : SymbolInfoDouble(_Symbol, SYMBOL_BID);
       slProjetado     = precoReferencia + (pontosSL * _Point);
       tpProjetado     = precoReferencia - (pontosTP * _Point);
       corEntrada      = clrCrimson;
@@ -1153,7 +1268,7 @@ void CriarBotaoFase(string nome, string texto, int x, int y, int largura, int al
 }
 
 //+------------------------------------------------------------------+
-//| Painel principal - 11 linhas, ordem espelhada conforme o canto   |
+//| Painel principal - 12 linhas, ordem espelhada conforme o canto   |
 //+------------------------------------------------------------------+
 void AtualizarPainelVisualEmTempoReal()
 {
@@ -1195,7 +1310,7 @@ void AtualizarPainelVisualEmTempoReal()
    {
       if(globalMensagemStatus.Find("Basta por hoje") >= 0 && !PositionSelect(_Symbol))
       {
-         globalMensagemStatus = "(C) Compra | (V) Venda | (Enter) Envia | (CTRL+Enter) Zera";
+         globalMensagemStatus = "(C ou SHIFT) Compra | (V ou CTRL) Venda";
       }
    }
 
@@ -1236,7 +1351,7 @@ void AtualizarPainelVisualEmTempoReal()
          aguardandoSomSaida = true;
          tentativasSomSaida = 0;
          if(!algumLimiteAtingido)
-            globalMensagemStatus = "(C) Compra | (V) Venda | (Enter) Envia | (CTRL+Enter) Zera";
+            globalMensagemStatus = "(C ou SHIFT) Compra | (V ou CTRL) Venda";
          posicaoEstavaAberta = false;
       }
       ObjectDelete(0, LABEL_PRECO_POSICAO);
@@ -1289,7 +1404,11 @@ void AtualizarPainelVisualEmTempoReal()
    string textoStatus = globalMensagemStatus;
    color corStatus = algumLimiteAtingido ? clrRed : clrBlack;
 
-   // Índices 0..10 correspondem às linhas 1..11 da especificação, na ordem do painel "em cima".
+   // ---- Atalhos fixos (linha 12, nova) - sempre ao lado da linha de status, e espelha
+   // junto com ela por já usar o mesmo esquema de GetLinhaY() ----
+   string textoAtalhos = "(Para C ou V: Enter) Envia | (CTRL+Enter) Zera";
+
+   // Índices 0..11 correspondem às linhas 1..12 da especificação, na ordem do painel "em cima".
    // Quando o painel está embaixo, o próprio canto (CORNER_RIGHT_LOWER) já inverte a
    // direção em que o Y cresce, espelhando a ordem visual das linhas automaticamente.
    CriarTextoLabel(PREFIX_TXT+"0",  textoPnLMensal, MARGEM_DIREITA_TEXTO, GetLinhaY(0), 10, corPnLMensal, cantoPainelAtual);
@@ -1303,6 +1422,7 @@ void AtualizarPainelVisualEmTempoReal()
    CriarTextoLabel(PREFIX_TXT+"8",  textoPnLDiario,  MARGEM_DIREITA_TEXTO, GetLinhaY(8), 10, corPnLDiario, cantoPainelAtual);
    CriarTextoLabel(PREFIX_TXT+"9",  textoPosicao,    MARGEM_DIREITA_TEXTO, GetLinhaY(9), 10, corPosicao, cantoPainelAtual);
    CriarTextoLabel(PREFIX_TXT+"10", textoStatus,     MARGEM_DIREITA_TEXTO, GetLinhaY(10), 10, corStatus, cantoPainelAtual);
+   CriarTextoLabel(PREFIX_TXT+"11", textoAtalhos,    MARGEM_DIREITA_TEXTO, GetLinhaY(11), 10, clrBlack, cantoPainelAtual);
 
    // Botões da linha 3 (índice 2) - troca de fase
    CriarBotaoFase("Btn_FaseMenos", "-", 89, GetLinhaY(2)-1, 28, 16);
@@ -1381,6 +1501,10 @@ void ApagarLinhasProjecao()
 {
    operacaoPendente = false;
    tipoOperacao = 0;
+   usarPrecoDoClique = false;
+   precoCliqueReferencia = 0.0;
+   armadoPorModificador = false;
+   modificadorTipoOperacao = 0;
    ObjectDelete(0, PREFIX_OBJ+"Entrada");
    ObjectDelete(0, PREFIX_OBJ+"Loss");
    ObjectDelete(0, PREFIX_OBJ+"Gain");
