@@ -1,8 +1,8 @@
 //+------------------------------------------------------------------+
-//|         Boleta_Indice_Com_Painel_v3.33.mq5                       |
+//|         Boleta_Indice_Com_Painel_v3.34.mq5                       |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2026"
-#property version   "3.33"
+#property version   "3.34"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -1425,7 +1425,7 @@ void DefaultAtualizarLinhasCustomizadas()
       precoReferencia = usarPrecoDoClique ? ArredondarParaPassoDoPreco(precoCliqueReferencia) : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
       slProjetado     = precoReferencia - (pontosSL * _Point);
       tpProjetado     = precoReferencia + (pontosTP * _Point);
-      corEntrada      = clrDodgerBlue;
+      corEntrada      = clrLimeGreen;
    }
    else if(tipoOperacao == 2)
    {
@@ -1437,7 +1437,7 @@ void DefaultAtualizarLinhasCustomizadas()
 
    if(precoReferencia <= 0) return;
 
-   DesenharLinhaH(PREFIX_OBJ+"Entrada", precoReferencia, corEntrada, STYLE_SOLID, 2);
+   DesenharLinhaH(PREFIX_OBJ+"Entrada", precoReferencia, corEntrada, STYLE_SOLID, 1);
    DesenharLinhaH(PREFIX_OBJ+"Loss",    slProjetado, clrRed, STYLE_DOT, 1);
    DesenharLinhaH(PREFIX_OBJ+"Gain",    tpProjetado, clrLimeGreen, STYLE_DOT, 1);
    ChartRedraw(0);
