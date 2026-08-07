@@ -1,8 +1,8 @@
 //+------------------------------------------------------------------+
-//|         Boleta_Indice_Com_Painel_v3.32.mq5                       |
+//|         Boleta_Indice_Com_Painel_v3.33.mq5                       |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2026"
-#property version   "3.32"
+#property version   "3.33"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -149,6 +149,25 @@ int LARGURA_SEPARADOR = 369; // largura do separador em pixels (independe de fon
 int GetLinhaY(int i)
 {
    return BASE_MARGIN + i * LINE_HEIGHT;
+}
+
+// Escolhe automaticamente preto ou branco para texto que precisa de bom contraste contra
+// a cor de fundo ATUAL do gráfico (o usuário pode trocar entre fundo claro/escuro a
+// qualquer momento nas propriedades do gráfico) - usa a fórmula padrão de luminância
+// percebida (YIQ) para decidir qual dos dois contrasta melhor.
+color CorContrasteComFundo()
+{
+   long corFundo = 0;
+   if(!ChartGetInteger(0, CHART_COLOR_BACKGROUND, 0, corFundo))
+      return clrBlack; // não conseguiu ler a cor de fundo - usa preto como padrão seguro
+
+   int r = (int)(corFundo & 0xFF);
+   int g = (int)((corFundo >> 8) & 0xFF);
+   int b = (int)((corFundo >> 16) & 0xFF);
+
+   double luminancia = (r * 299 + g * 587 + b * 114) / 1000.0; // 0 (preto) a 255 (branco)
+
+   return (luminancia > 128) ? clrBlack : clrWhite;
 }
 
 // Converte um deslocamento "para baixo, na tela" em unidades de Y_DISTANCE, considerando
@@ -1644,7 +1663,7 @@ void AtualizarPainelVisualEmTempoReal()
 
    // ---- Status (linha 11) ----
    string textoStatus = globalMensagemStatus;
-   color corStatus = algumLimiteAtingido ? clrRed : clrBlack;
+   color corStatus = algumLimiteAtingido ? clrRed : CorContrasteComFundo();
 
    // ---- Atalhos fixos (linha 12, nova) - sempre ao lado da linha de status, e espelha
    // junto com ela por já usar o mesmo esquema de GetLinhaY() - some quando o limite
@@ -1665,7 +1684,7 @@ void AtualizarPainelVisualEmTempoReal()
    CriarTextoLabel(PREFIX_TXT+"8",  textoPnLDiario,  MARGEM_DIREITA_TEXTO, GetLinhaY(8), 10, corPnLDiario, cantoPainelAtual);
    CriarTextoLabel(PREFIX_TXT+"9",  textoPosicao,    MARGEM_DIREITA_TEXTO, GetLinhaY(9), 10, corPosicao, cantoPainelAtual);
    CriarTextoLabel(PREFIX_TXT+"10", textoStatus,     MARGEM_DIREITA_TEXTO, GetLinhaY(10), 10, corStatus, cantoPainelAtual);
-   CriarTextoLabel(PREFIX_TXT+"11", textoAtalhos,    MARGEM_DIREITA_TEXTO, GetLinhaY(11), 10, clrBlack, cantoPainelAtual);
+   CriarTextoLabel(PREFIX_TXT+"11", textoAtalhos,    MARGEM_DIREITA_TEXTO, GetLinhaY(11), 10, CorContrasteComFundo(), cantoPainelAtual);
    SetObjVisivel(PREFIX_TXT+"11", !algumLimiteAtingido);
 
    // Botões da linha 3 (índice 2) - troca de fase
