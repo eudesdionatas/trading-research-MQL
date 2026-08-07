@@ -1,8 +1,8 @@
 //+------------------------------------------------------------------+
-//|         Boleta_Indice_Com_Painel_v3.14.mq5                       |
+//|         Boleta_Indice_Com_Painel_v3.22.mq5                       |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2026"
-#property version   "3.14"
+#property version   "3.22"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -354,13 +354,14 @@ void OnChartEvent(const int id, const long& lparam, const double& dparam, const 
    {
       int tecla = (int)lparam;
 
-      // (CTRL+ENTER) zera a posição aberta, não importa como ela foi armada (C, V ou
-      // SHIFT/CTRL) - tem prioridade sobre "enviar uma nova ordem" sempre que já existir
-      // uma posição aberta. Funciona mesmo com os limites diários já atingidos.
+      // (CTRL+ENTER) zera a posição aberta OU cancela a ordem pendente, não importa como
+      // foi armada (C, V ou SHIFT/CTRL) - tem prioridade sobre "enviar uma nova ordem"
+      // sempre que já existir uma posição/ordem pendente. Funciona mesmo com os limites
+      // diários já atingidos.
       if(tecla == 13)
       {
          bool ctrlPressionado = (TerminalInfoInteger(TERMINAL_KEYSTATE_CONTROL) < 0);
-         if(ctrlPressionado && PositionSelect(_Symbol))
+         if(ctrlPressionado && ExistePosicaoOuOrdemPendente())
          {
             FecharPosicaoAberta();
             return;
@@ -370,7 +371,7 @@ void OnChartEvent(const int id, const long& lparam, const double& dparam, const 
       if(tecla == 27) // Tecla 'ESC'
       {
          ApagarLinhasProjecao();
-         globalMensagemStatus = "Cancelado. Pressione (C ou SHIFT) Compra | (V ou CTRL) Venda";
+         globalMensagemStatus = "(C ou SHIFT) Compra | (V ou CTRL) Venda";
          return;
       }
 
@@ -419,17 +420,111 @@ void OnChartEvent(const int id, const long& lparam, const double& dparam, const 
    // de contexto nativo do gráfico.
    if(id == CHARTEVENT_CLICK)
    {
-      if(!operacaoPendente) return;
+      int xPixel = (int)lparam;
+      int yPixel = (int)dparam;
+
+      // Log de diagnóstico: mostra se o CHARTEVENT_CLICK está chegando e o estado no
+      // momento. Se aparecer "faltou clique" no comportamento mas NADA aparecer aqui no
+      // log (aba Experts), o problema é o próprio MetaTrader não estar gerando o evento
+      // de clique (ex.: ferramenta "Mira/Crosshair" ativa na barra de ferramentas do
+      // gráfico consome o clique antes de chegar ao EA) - trocar para a ferramenta
+      // "Cursor" (seta) resolve isso.
+      Print("[CLIQUE] x=", xPixel, " y=", yPixel, " operacaoPendente=", operacaoPendente,
+            " usarPrecoDoClique=", usarPrecoDoClique, " armadoPorModificador=", armadoPorModificador);
+
+      if(!operacaoPendente)
+      {
+         // O polling (ProcessarModificadoresDeArme) roda a cada ~50ms; se o usuário
+         // pressionar SHIFT/CTRL e clicar quase ao mesmo tempo, o clique pode chegar
+         // ANTES do próximo ciclo de polling ter armado a operação - nesse caso, sem
+         // este bloco, o clique simplesmente não faria nada (era a causa de "às vezes
+         // preciso de vários cliques"). Aqui, o próprio clique checa o estado atual de
+         // SHIFT/CTRL e arma na hora, usando a posição exata do clique como referência.
+         bool shiftAgora = (TerminalInfoInteger(TERMINAL_KEYSTATE_SHIFT) < 0);
+         bool ctrlAgora   = (TerminalInfoInteger(TERMINAL_KEYSTATE_CONTROL) < 0);
+         if(shiftAgora == ctrlAgora)
+         {
+            Print("[CLIQUE] Ignorado: nenhum modificador pressionado (ou os dois juntos).");
+            return;
+         }
+
+         int subJanela = 0;
+         datetime tempoClique = 0;
+         double precoClique = 0;
+         if(!ChartXYToTimePrice(0, xPixel, yPixel, subJanela, tempoClique, precoClique) || subJanela != 0)
+         {
+            Print("[CLIQUE] Ignorado: ChartXYToTimePrice falhou ou clique fora da janela principal.");
+            return;
+         }
+
+         if(BloqueadoPorLimiteDiario())
+         {
+            Print("[CLIQUE] Ignorado: BloqueadoPorLimiteDiario() retornou true.");
+            return;
+         }
+
+         int tipo = shiftAgora ? 1 : 2;
+         ArmarOperacao(tipo, true, precoClique);
+         armadoPorModificador = true;
+         modificadorTipoOperacao = tipo;
+         Print("[CLIQUE] Armado na hora do clique. tipo=", tipo, " preco=", DoubleToString(precoClique, _Digits));
+      }
+      else if(usarPrecoDoClique)
+      {
+         // Já armado - recalcula o preço exatamente na posição do clique (em vez de
+         // confiar no último preço atualizado pelo MOUSE_MOVE, que pode estar levemente
+         // defasado) - garante que a ordem seja enviada para o local exato do clique.
+         int subJanela = 0;
+         datetime tempoClique = 0;
+         double precoClique = 0;
+         if(ChartXYToTimePrice(0, xPixel, yPixel, subJanela, tempoClique, precoClique) && subJanela == 0)
+            precoCliqueReferencia = precoClique;
+      }
+
+      if(!operacaoPendente)
+      {
+         Print("[CLIQUE] Nada foi enviado: operacaoPendente continua false após a tentativa de armar.");
+         return; // ainda nada armado (ex.: bloqueado por limite diário)
+      }
+
       if(BloqueadoPorLimiteDiario()) return;
       EnviarOrdemMercado();
    }
 }
 
-// Verifica os limites diários (ordens/loss/gain, já considerando a extensão pelo LFT).
-// Retorna true (e já mostra a mensagem/apaga a prévia) se algo estiver bloqueado -
-// usado antes de armar uma nova operação (C, V, SHIFT/CTRL+clique) ou enviar (ENTER).
+// Retorna o ticket da ordem pendente (Limit/Stop) deste símbolo, se existir alguma; ou 0.
+ulong TicketDaOrdemPendente()
+{
+   int total = OrdersTotal();
+   for(int i = 0; i < total; i++)
+   {
+      ulong ticket = OrderGetTicket(i);
+      if(ticket > 0 && OrderGetString(ORDER_SYMBOL) == _Symbol)
+         return ticket;
+   }
+   return 0;
+}
+
+bool ExistePosicaoOuOrdemPendente()
+{
+   if(PositionSelect(_Symbol)) return true;
+   return (TicketDaOrdemPendente() > 0);
+}
+
+// Verifica os limites diários (ordens/loss/gain, já considerando a extensão pelo LFT) e
+// se já existe uma posição aberta OU uma ordem pendente (Limit/Stop) aguardando o preço.
+// Retorna true (e já mostra a mensagem/apaga a prévia) se algo estiver bloqueado - usado
+// antes de armar uma nova operação (C, V, SHIFT/CTRL) ou enviar (ENTER/clique). A checagem
+// é a mesma para qualquer forma de armar a operação, exatamente para impedir abrir mais de
+// uma ordem (executada ou pendente) ao mesmo tempo.
 bool BloqueadoPorLimiteDiario()
 {
+   if(ExistePosicaoOuOrdemPendente())
+   {
+      // Já existe posição aberta ou ordem pendente - não deixa armar nem enviar outra.
+      return true;
+   }
+
    int E = NegociosDiaEfetivo();
    int maxOrdensPermitidas = E * 2;
    int operacoesFeitasHoje = CalcularOperacoesDoDia();
@@ -471,6 +566,28 @@ void ArmarOperacao(int tipo, bool usarClique, double precoClique)
    globalMensagemStatus = StringFormat("Modo %s ativo! (ENTER ou clique) Envia | (ESC) Cancela", nomeOperacao);
 }
 
+// Arma a operação já usando a última posição conhecida do mouse sobre o gráfico (se
+// disponível), em vez de cair no preço de mercado atual - evita que a prévia fique
+// "grudada" acompanhando o mercado no instante entre o rearme automático (tecla ainda
+// pressionada após enviar uma ordem) e o próximo movimento real do mouse.
+void ArmarOperacaoNoPrecoDoMouse(int tipo)
+{
+   if(ultimoMouseXPixel >= 0 && ultimoMouseYPixel >= 0)
+   {
+      int subJanela = 0;
+      datetime tempoMouse = 0;
+      double precoMouse = 0;
+      if(ChartXYToTimePrice(0, ultimoMouseXPixel, ultimoMouseYPixel, subJanela, tempoMouse, precoMouse) && subJanela == 0)
+      {
+         ArmarOperacao(tipo, true, precoMouse);
+         return;
+      }
+   }
+   // Sem posição conhecida do mouse ainda (ex.: mouse nunca passou pelo gráfico nesta
+   // sessão) - cai no preço de mercado como último recurso; o próximo MOUSE_MOVE corrige.
+   ArmarOperacao(tipo, false, 0.0);
+}
+
 // Roda a cada ciclo (tick/timer). Detecta SHIFT/CTRL pressionados por polling (o MQL5 não
 // tem evento de "tecla solta"), e arma/desarma automaticamente o modo compra/venda:
 //   - SHIFT pressionado e nada armado por modificador ainda -> arma compra
@@ -490,18 +607,18 @@ void ProcessarModificadoresDeArme()
       if(shiftAgora)
       {
          if(BloqueadoPorLimiteDiario()) return;
-         ArmarOperacao(1, false, 0.0);
+         ArmarOperacaoNoPrecoDoMouse(1);
          armadoPorModificador = true;
          modificadorTipoOperacao = 1;
-         globalMensagemStatus = "Modo compra ativo (SHIFT)! Clique para enviar | (ESC) Cancela";
+         globalMensagemStatus = "Modo compra ativo (SHIFT)! Clique para enviar";
       }
       else if(ctrlAgora)
       {
          if(BloqueadoPorLimiteDiario()) return;
-         ArmarOperacao(2, false, 0.0);
+         ArmarOperacaoNoPrecoDoMouse(2);
          armadoPorModificador = true;
          modificadorTipoOperacao = 2;
-         globalMensagemStatus = "Modo venda ativo (CTRL)! Clique para enviar | (ESC) Cancela";
+         globalMensagemStatus = "Modo venda ativo (CTRL)! Clique para enviar";
       }
    }
    else if(!shiftAgora && !ctrlAgora)
@@ -706,6 +823,15 @@ bool CondicaoAtivacaoLFT(double pnlDiarioAtual, double acumProgAtual)
 
 void EnviarOrdemMercado()
 {
+   // Camada extra de segurança: nunca envia uma nova ordem se já existe posição aberta ou
+   // ordem pendente, mesmo que o chamador já devesse ter checado isso via BloqueadoPorLimiteDiario().
+   if(ExistePosicaoOuOrdemPendente())
+   {
+      globalMensagemStatus = "Já existe posição/ordem pendente! (CTRL+Enter) para cancelar antes.";
+      ApagarLinhasProjecao();
+      return;
+   }
+
    int E = NegociosDiaEfetivo();
    int maxOrdensPermitidas = E * 2;
    int operacoesFeitasHoje = CalcularOperacoesDoDia();
@@ -735,6 +861,14 @@ void EnviarOrdemMercado()
       Print("[LFT] Operação-bônus: SL travado em ", pontosSL, " pts (normal da fase seria ",
             TabelaFases[faseAtual].lossPontos, " pts) para não ultrapassar o LFT de R$ ",
             DoubleToString(lftAtual, 2), ".");
+   }
+
+   // Quando armada por SHIFT/CTRL (preço específico do mouse), a ordem fica PENDENTE
+   // (Limit ou Stop) naquele preço, em vez de ser enviada a mercado imediatamente.
+   if(usarPrecoDoClique)
+   {
+      EnviarOrdemPendente(pontosSL, pontosTP);
+      return;
    }
 
    int loteParaEnviar = papeisPorOperacao;
@@ -806,6 +940,65 @@ void EnviarOrdemMercado()
       Print("[ERRO] Falha ao enviar ordem. Retcode: ", trade.ResultRetcode(),
             " - ", trade.ResultRetcodeDescription(), " | GetLastError: ", GetLastError());
       globalMensagemStatus = StringFormat("Falha ao enviar ordem! (retcode %d)", trade.ResultRetcode());
+      ApagarLinhasProjecao();
+   }
+}
+
+// Envia uma ordem PENDENTE (Limit ou Stop, decidido dinamicamente conforme o preço alvo
+// está abaixo ou acima do mercado atual) no preço exato indicado pelo SHIFT/CTRL+mouse -
+// diferente de EnviarOrdemMercado(), que envia a mercado imediatamente. O SL/TP já são
+// calculados a partir do próprio preço alvo (que será o preço de execução, quando a ordem
+// for acionada), e são carregados automaticamente pelo MetaTrader para a posição quando
+// a ordem pendente for preenchida.
+void EnviarOrdemPendente(double pontosSL, double pontosTP)
+{
+   // O preço vindo do clique/mouse (ChartXYToTimePrice) tem precisão "contínua" - mas a
+   // corretora só aceita preços múltiplos do tick size do contrato (ex.: 5 em 5 pontos no
+   // WIN). Sem este arredondamento, a ordem é rejeitada com retcode 10015 (invalid price).
+   double precoAlvo = NormalizeDouble(ArredondarParaPassoDoPreco(precoCliqueReferencia), _Digits);
+   string comentario = StringFormat("%s pendente Fase %d", (tipoOperacao == 1 ? "Compra" : "Venda"), faseAtual);
+
+   double sl = 0, tp = 0;
+   bool ordemOk = false;
+
+   if(tipoOperacao == 1) // compra
+   {
+      double precoAtual = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+      sl = NormalizeDouble(precoAlvo - (pontosSL * _Point), _Digits);
+      tp = NormalizeDouble(precoAlvo + (pontosTP * _Point), _Digits);
+
+      if(precoAlvo < precoAtual)
+         ordemOk = trade.BuyLimit(papeisPorOperacao, precoAlvo, _Symbol, sl, tp, ORDER_TIME_GTC, 0, comentario);
+      else if(precoAlvo > precoAtual)
+         ordemOk = trade.BuyStop(papeisPorOperacao, precoAlvo, _Symbol, sl, tp, ORDER_TIME_GTC, 0, comentario);
+      else // preço alvo == preço atual (raro): envia a mercado diretamente
+         ordemOk = trade.Buy(papeisPorOperacao, _Symbol, 0.0, sl, tp, comentario);
+   }
+   else if(tipoOperacao == 2) // venda
+   {
+      double precoAtual = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+      sl = NormalizeDouble(precoAlvo + (pontosSL * _Point), _Digits);
+      tp = NormalizeDouble(precoAlvo - (pontosTP * _Point), _Digits);
+
+      if(precoAlvo > precoAtual)
+         ordemOk = trade.SellLimit(papeisPorOperacao, precoAlvo, _Symbol, sl, tp, ORDER_TIME_GTC, 0, comentario);
+      else if(precoAlvo < precoAtual)
+         ordemOk = trade.SellStop(papeisPorOperacao, precoAlvo, _Symbol, sl, tp, ORDER_TIME_GTC, 0, comentario);
+      else
+         ordemOk = trade.Sell(papeisPorOperacao, _Symbol, 0.0, sl, tp, comentario);
+   }
+
+   if(ordemOk)
+   {
+      ApagarLinhasProjecao();
+      globalMensagemStatus = StringFormat("Ordem pendente em %s! (CTRL+Enter) Cancela", DoubleToString(precoAlvo, _Digits));
+   }
+   else
+   {
+      Print("[ERRO] Falha ao enviar ordem pendente em ", DoubleToString(precoAlvo, _Digits),
+            ". Retcode: ", trade.ResultRetcode(), " - ", trade.ResultRetcodeDescription(),
+            " | GetLastError: ", GetLastError());
+      globalMensagemStatus = StringFormat("Falha ao enviar ordem pendente! (retcode %d)", trade.ResultRetcode());
       ApagarLinhasProjecao();
    }
 }
@@ -946,11 +1139,29 @@ void FecharPosicaoAberta()
          globalMensagemStatus = "(C ou SHIFT) Compra | (V ou CTRL) Venda";
          posicaoEstavaAberta = false;
       }
+      return;
    }
-   else
+
+   // Sem posição aberta - mas pode existir uma ordem PENDENTE (Limit/Stop) esperando o
+   // preço, criada por SHIFT/CTRL. CTRL+Enter também cancela essa ordem pendente.
+   ulong ticketPendente = TicketDaOrdemPendente();
+   if(ticketPendente > 0)
    {
-      globalMensagemStatus = "(C ou SHIFT) Compra | (V ou CTRL) Venda";
+      if(trade.OrderDelete(ticketPendente))
+      {
+         globalMensagemStatus = "(C ou SHIFT) Compra | (V ou CTRL) Venda";
+         if(!PlaySound("ok.wav")) PlaySound("\\Audio\\ok.wav");
+      }
+      else
+      {
+         Print("[ERRO] Falha ao cancelar ordem pendente ", ticketPendente, ". Retcode: ",
+               trade.ResultRetcode(), " - ", trade.ResultRetcodeDescription());
+         globalMensagemStatus = "Falha ao cancelar ordem pendente!";
+      }
+      return;
    }
+
+   globalMensagemStatus = "(C ou SHIFT) Compra | (V ou CTRL) Venda";
 }
 
 void CalcularMetricasDoDia()
@@ -1176,14 +1387,14 @@ void DefaultAtualizarLinhasCustomizadas()
 
    if(tipoOperacao == 1)
    {
-      precoReferencia = usarPrecoDoClique ? precoCliqueReferencia : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+      precoReferencia = usarPrecoDoClique ? ArredondarParaPassoDoPreco(precoCliqueReferencia) : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
       slProjetado     = precoReferencia - (pontosSL * _Point);
       tpProjetado     = precoReferencia + (pontosTP * _Point);
       corEntrada      = clrDodgerBlue;
    }
    else if(tipoOperacao == 2)
    {
-      precoReferencia = usarPrecoDoClique ? precoCliqueReferencia : SymbolInfoDouble(_Symbol, SYMBOL_BID);
+      precoReferencia = usarPrecoDoClique ? ArredondarParaPassoDoPreco(precoCliqueReferencia) : SymbolInfoDouble(_Symbol, SYMBOL_BID);
       slProjetado     = precoReferencia + (pontosSL * _Point);
       tpProjetado     = precoReferencia - (pontosTP * _Point);
       corEntrada      = clrCrimson;
@@ -1324,6 +1535,21 @@ void AtualizarPainelVisualEmTempoReal()
       ultimoTicketPosicaoAberta = PositionGetInteger(POSITION_IDENTIFIER);
       if(!algumLimiteAtingido)
          globalMensagemStatus = "Ordem executada! (CTRL + Enter) para Zerar";
+
+      // Se ainda não há um alvo de SL/TP registrado para o watchdog (ex.: esta posição veio
+      // do preenchimento de uma ordem PENDENTE, não de uma ordem a mercado enviada por
+      // EnviarOrdemMercado()), adota o SL/TP que a própria posição já traz - o MetaTrader
+      // já carrega automaticamente o SL/TP da ordem pendente para a posição resultante.
+      if(slAlvoPosicaoAtual == 0.0 && tpAlvoPosicaoAtual == 0.0)
+      {
+         double slAtualPos = PositionGetDouble(POSITION_SL);
+         double tpAtualPos = PositionGetDouble(POSITION_TP);
+         if(slAtualPos != 0.0 || tpAtualPos != 0.0)
+         {
+            slAlvoPosicaoAtual = slAtualPos;
+            tpAlvoPosicaoAtual = tpAtualPos;
+         }
+      }
 
       long tipoPos = PositionGetInteger(POSITION_TYPE);
       double precoAberturaPos = PositionGetDouble(POSITION_PRICE_OPEN);
