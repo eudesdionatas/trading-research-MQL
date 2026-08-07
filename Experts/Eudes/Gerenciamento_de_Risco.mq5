@@ -1,8 +1,8 @@
 //+------------------------------------------------------------------+
-//|         Boleta_Indice_Com_Painel_v3.22.mq5                       |
+//|         Boleta_Indice_Com_Painel_v3.32.mq5                       |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2026"
-#property version   "3.22"
+#property version   "3.32"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -169,6 +169,14 @@ void SetObjVisivel(string nome, bool visivel)
 int OnInit()
 {
    faseAtual = MathMin(10, MathMax(1, InpFaseInicial));
+
+   // Desativa a "Navegação rápida" nativa do MetaTrader - por padrão, pressionar ENTER
+   // ou ESPAÇO no gráfico abre uma barrinha de busca (com cursor de texto piscando) para
+   // pular para datas/símbolos. Como o robô usa ENTER e CTRL+ENTER pesadamente como
+   // atalhos, o próprio MetaTrader intercepta essas teclas para abrir essa busca em vez
+   // de entregá-las ao robô - a documentação da MetaQuotes recomenda explicitamente
+   // desativar isso quando o programa processa ENTER/ESPAÇO, exatamente o nosso caso.
+   ChartSetInteger(0, CHART_QUICK_NAVIGATION, false);
 
    // Detecta automaticamente o modo de preenchimento (Fill Policy) aceito pela corretora/ativo.
    // Sem isso, o CTrade usa FOK por padrão, que muitas corretoras/ativos rejeitam silenciosamente
@@ -414,10 +422,10 @@ void OnChartEvent(const int id, const long& lparam, const double& dparam, const 
       }
    }
 
-   // Clique esquerdo agora só ENVIA a ordem já armada (por C, V ou SHIFT/CTRL) - não
-   // arma nem posiciona mais nada sozinho. Nota técnica: o MQL5 só expõe eventos de
-   // clique para o botão ESQUERDO; o direito é reservado pela plataforma para o menu
-   // de contexto nativo do gráfico.
+   // Clique esquerdo agora só ENVIA a ordem armada por SHIFT/CTRL - operações armadas por
+   // C/V (teclado) só são enviadas com ENTER, não mais por clique. Nota técnica: o MQL5
+   // só expõe eventos de clique para o botão ESQUERDO; o direito é reservado pela
+   // plataforma para o menu de contexto nativo do gráfico.
    if(id == CHARTEVENT_CLICK)
    {
       int xPixel = (int)lparam;
@@ -485,6 +493,14 @@ void OnChartEvent(const int id, const long& lparam, const double& dparam, const 
       {
          Print("[CLIQUE] Nada foi enviado: operacaoPendente continua false após a tentativa de armar.");
          return; // ainda nada armado (ex.: bloqueado por limite diário)
+      }
+
+      if(!usarPrecoDoClique)
+      {
+         // Operação armada por C/V (teclado) - o clique não envia mais nessa modalidade,
+         // só o ENTER. O clique só envia quando a operação foi armada por SHIFT/CTRL.
+         Print("[CLIQUE] Ignorado: operação armada por C/V - use ENTER para enviar.");
+         return;
       }
 
       if(BloqueadoPorLimiteDiario()) return;
@@ -563,7 +579,7 @@ void ArmarOperacao(int tipo, bool usarClique, double precoClique)
    AtualizarLinhasCustomizadas();
 
    string nomeOperacao = (tipo == 1) ? "compra" : "venda";
-   globalMensagemStatus = StringFormat("Modo %s ativo! (ENTER ou clique) Envia | (ESC) Cancela", nomeOperacao);
+   globalMensagemStatus = StringFormat("Modo %s ativo! (ENTER) Envia | (ESC) Cancela", nomeOperacao);
 }
 
 // Arma a operação já usando a última posição conhecida do mouse sobre o gráfico (se
@@ -1631,7 +1647,8 @@ void AtualizarPainelVisualEmTempoReal()
    color corStatus = algumLimiteAtingido ? clrRed : clrBlack;
 
    // ---- Atalhos fixos (linha 12, nova) - sempre ao lado da linha de status, e espelha
-   // junto com ela por já usar o mesmo esquema de GetLinhaY() ----
+   // junto com ela por já usar o mesmo esquema de GetLinhaY() - some quando o limite
+   // diário é atingido, já que nesse momento não faz sentido convidar a enviar nova ordem.
    string textoAtalhos = "(Para C ou V: Enter) Envia | (CTRL+Enter) Zera";
 
    // Índices 0..11 correspondem às linhas 1..12 da especificação, na ordem do painel "em cima".
@@ -1649,6 +1666,7 @@ void AtualizarPainelVisualEmTempoReal()
    CriarTextoLabel(PREFIX_TXT+"9",  textoPosicao,    MARGEM_DIREITA_TEXTO, GetLinhaY(9), 10, corPosicao, cantoPainelAtual);
    CriarTextoLabel(PREFIX_TXT+"10", textoStatus,     MARGEM_DIREITA_TEXTO, GetLinhaY(10), 10, corStatus, cantoPainelAtual);
    CriarTextoLabel(PREFIX_TXT+"11", textoAtalhos,    MARGEM_DIREITA_TEXTO, GetLinhaY(11), 10, clrBlack, cantoPainelAtual);
+   SetObjVisivel(PREFIX_TXT+"11", !algumLimiteAtingido);
 
    // Botões da linha 3 (índice 2) - troca de fase
    CriarBotaoFase("Btn_FaseMenos", "-", 89, GetLinhaY(2)-1, 28, 16);

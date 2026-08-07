@@ -5,6 +5,7 @@
 *.chr
 *.dat
 *.wnd
+*.tpl
 
 # Ignorar executáveis e compilados
 *.exe
