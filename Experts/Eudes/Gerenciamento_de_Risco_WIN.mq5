@@ -1,8 +1,8 @@
 //+------------------------------------------------------------------+
-//|         Boleta_Indice_Com_Painel_v3.34.mq5                       |
+//|         Boleta_Indice_Com_Painel_v3.36.mq5                       |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2026"
-#property version   "3.34"
+#property version   "3.36"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -1041,7 +1041,7 @@ void EnviarOrdemPendente(double pontosSL, double pontosTP)
 // Tenta localizar o deal de saída da posição informada (por POSITION_IDENTIFIER) e tocar
 // o som correspondente ao resultado. Retorna true se encontrou (e já tocou o som), ou
 // false se o deal ainda não apareceu no histórico (para tentar de novo no próximo tick).
-// IMPORTANTE: se não encontrar, NÃO toca nenhum som - evita o bug de tocar "stops.wav"
+// IMPORTANTE: se não encontrar, NÃO toca nenhum som - evita o bug de tocar "loss.wav"
 // por padrão quando o histórico ainda não sincronizou o deal de um TP recém-executado.
 bool TentarTocarSomSaida(ulong ticketPosicao)
 {
@@ -1072,7 +1072,7 @@ bool TentarTocarSomSaida(ulong ticketPosicao)
       }
       else
       {
-         if(!PlaySound("stops.wav")) PlaySound("\\Audio\\stops.wav");
+         if(!PlaySound("loss.wav")) PlaySound("\\Audio\\loss.wav");
       }
       return true;
    }
@@ -1105,7 +1105,7 @@ void ProcessarSomDeSaidaPendente()
       }
       else
       {
-         if(!PlaySound("stops.wav")) PlaySound("\\Audio\\stops.wav");
+         if(!PlaySound("loss.wav")) PlaySound("\\Audio\\loss.wav");
       }
       aguardandoSomSaida = false;
    }
@@ -1185,7 +1185,7 @@ void FecharPosicaoAberta()
       if(trade.OrderDelete(ticketPendente))
       {
          globalMensagemStatus = "(C ou SHIFT) Compra | (V ou CTRL) Venda";
-         if(!PlaySound("ok.wav")) PlaySound("\\Audio\\ok.wav");
+         if(!PlaySound("cancelPendingOrder.wav")) PlaySound("\\Audio\\cancelPendingOrder.wav");
       }
       else
       {
@@ -1561,11 +1561,17 @@ void AtualizarPainelVisualEmTempoReal()
    }
 
    // ---- Posição / status do preço na tela ----
-   string textoPosicao = StringFormat("Posição (0 %s)", _Symbol);
+   string textoPosicao = StringFormat("Posição zerada (0 %s)", _Symbol);
    color corPosicao = clrDarkGray;
 
    if(PositionSelect(_Symbol))
    {
+      if(!posicaoEstavaAberta)
+      {
+         // Acabou de detectar a posição pela primeira vez (ordem a mercado executada, ou
+         // ordem pendente preenchida) - toca o som de ordem aberta.
+         if(!PlaySound("openedOrder.wav")) PlaySound("\\Audio\\openedOrder.wav");
+      }
       posicaoEstavaAberta = true;
       ultimoTicketPosicaoAberta = PositionGetInteger(POSITION_IDENTIFIER);
       if(!algumLimiteAtingido)
@@ -1599,7 +1605,8 @@ void AtualizarPainelVisualEmTempoReal()
       string valorFormatado = DoubleToString(lucroFinanceiro, 2);
       StringReplace(valorFormatado, ".", ",");
 
-      textoPosicao = StringFormat("Posição (%d %s)", volumePosSinal, _Symbol);
+      string rotuloPosicao = (tipoPos == POSITION_TYPE_BUY) ? "Posição comprada" : "Posição vendida";
+      textoPosicao = StringFormat("%s (%d %s)", rotuloPosicao, volumePosSinal, _Symbol);
       corPosicao = (volumePosSinal > 0) ? clrLimeGreen : (volumePosSinal < 0 ? clrRed : clrDarkGray);
 
       color corPnLGrafico = (lucroFinanceiro > 0.0) ? clrLimeGreen : (lucroFinanceiro < 0.0 ? clrRed : clrDarkGray);
