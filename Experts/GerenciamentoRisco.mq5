@@ -6,7 +6,7 @@
 #property copyright "Copyright 2026"
 #property version   "1.0"
 #property strict
-#property description "Boleta de gerenciamento de risco por fases. Suporta CCM, WDO, WIN, "
+#property description "Boleta de gerenciamento de risco por fases. Suporta CCM, WDO e WIN, "
 #property description "detectando o ativo automaticamente pelo símbolo do gráfico."
 
 // A ordem dos includes importa: RiscoConfigAtivos.mqh define StructFase/ConfigAtivo,
