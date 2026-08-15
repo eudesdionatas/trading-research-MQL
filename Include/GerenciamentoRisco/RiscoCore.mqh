@@ -67,6 +67,29 @@ const int MAX_TENTATIVAS_SOM_PROTECAO = 1;       // som toca só 1x por episódi
 // Variável de controle do canto do painel (Padrão: Superior Direito)
 ENUM_BASE_CORNER cantoPainelAtual = CORNER_RIGHT_UPPER;
 
+// Quantidade de linhas que o painel ocupou na última atualização (varia conforme existam
+// ou não posições extra-gráfico sendo exibidas) - usada pelo cálculo do retângulo de
+// colisão do reposicionamento automático (ObterRetanguloPainel), para a altura acompanhar
+// o painel mesmo quando ele cresce/encolhe dinamicamente.
+int totalLinhasPainelAtual = 12;
+
+// Detecção do atalho CTRL+SPACE+ENTER ("zera TODAS as posições suportadas"). O MQL5 não
+// expõe um TERMINAL_KEYSTATE_SPACE (só existe para um conjunto fixo de teclas especiais),
+// então em vez de checar "SPACE está pressionada agora", guardamos QUANDO ela foi apertada
+// pela última vez (via GetTickCount(), em milissegundos) e, no keydown do ENTER, aceitamos
+// o combo se SPACE tiver sido pressionada há pouco tempo (com CTRL ainda segurado).
+uint ultimoTickSpacePressionado = 0;
+const uint JANELA_COMBO_TECLAS_MS = 1500; // tolerância entre soltar o SPACE e apertar o ENTER
+
+// Fila de sons de gain/loss: como o PlaySound() só tem um canal de áudio, tocar dois sons
+// muito próximos no tempo faz o segundo CORTAR o primeiro antes dele terminar (não fica
+// represado, mas também não toca por completo) - isso fica evidente ao fechar várias
+// posições de uma vez (ex.: CTRL+SPACE+ENTER). Em vez de tocar na hora, essas chamadas
+// entram numa fila e são liberadas uma de cada vez, respeitando um intervalo mínimo.
+string filaSons[];
+uint   proximoSomDaFilaLiberadoEm = 0;
+const uint INTERVALO_ENTRE_SONS_MS = 1150; // gain.wav dura 1000ms, loss.wav dura ~1098ms - 1150ms cobre os dois com folga
+
 // Variáveis das métricas do dia
 double maiorAmplitudeGlobal = 0.0;
 string horarioMaiorCandle = "";
@@ -194,7 +217,10 @@ void ObterRetanguloPainel(ENUM_BASE_CORNER canto, int &xEsq, int &xDir, int &yTo
    xDir = (int)larguraGrafico;
    xEsq = (int)larguraGrafico - MARGEM_DIREITA_TEXTO - LARGURA_SEPARADOR - 20; // folga de segurança
 
-   int alturaPainel = GetLinhaY(12) + 10; // 12 linhas do painel + folga de segurança
+   // totalLinhasPainelAtual é recalculado a cada desenho do painel (pode crescer quando
+   // aparecem posições de outros ativos suportados) - assim o retângulo de colisão
+   // acompanha o tamanho real do painel em vez de assumir sempre 12 linhas fixas.
+   int alturaPainel = GetLinhaY(totalLinhasPainelAtual) + 10; // + folga de segurança
 
    if(canto == CORNER_RIGHT_UPPER)
    {
@@ -401,6 +427,7 @@ void ProcessarRotinasDeAtualizacao()
    AtualizarPainelVisualEmTempoReal();
    ProcessarSomDeSaidaPendente();
    GarantirProtecaoDaPosicao();
+   ProcessarFilaDeSons();
 }
 
 void VerificarTrocaDeDia()
@@ -482,13 +509,33 @@ void OnChartEvent(const int id, const long& lparam, const double& dparam, const 
    {
       int tecla = (int)lparam;
 
+      // SPACE não tem um TERMINAL_KEYSTATE dedicado no MQL5 - guardamos só o instante em
+      // que foi apertada, para o combo CTRL+SPACE+ENTER (abaixo) reconhecer "SPACE foi
+      // pressionada há pouco, com CTRL ainda segurado" no momento do ENTER.
+      if(tecla == 32) // Tecla 'SPACE'
+      {
+         ultimoTickSpacePressionado = GetTickCount();
+      }
+
       // (CTRL+ENTER) zera a posição aberta OU cancela a ordem pendente, não importa como
       // foi armada (C, V ou SHIFT/CTRL) - tem prioridade sobre "enviar uma nova ordem"
       // sempre que já existir uma posição/ordem pendente. Funciona mesmo com os limites
       // diários já atingidos.
+      //
+      // (CTRL+SPACE+ENTER) zera TODAS as posições abertas em ativos suportados (WDO/WIN/
+      // CCM), inclusive as de outros papéis exibidas no painel - checado ANTES do CTRL+
+      // Enter "normal", já que é o combo mais específico dos dois.
       if(tecla == 13)
       {
-         bool ctrlPressionado = (TerminalInfoInteger(TERMINAL_KEYSTATE_CONTROL) < 0);
+         bool ctrlPressionado  = (TerminalInfoInteger(TERMINAL_KEYSTATE_CONTROL) < 0);
+         bool spaceRecente     = (GetTickCount() - ultimoTickSpacePressionado) <= JANELA_COMBO_TECLAS_MS;
+
+         if(ctrlPressionado && spaceRecente && ExisteQualquerPosicaoAbertaSuportada())
+         {
+            FecharTodasAsPosicoesSuportadas();
+            return;
+         }
+
          if(ctrlPressionado && ExistePosicaoOuOrdemPendente())
          {
             FecharPosicaoAberta();
@@ -1184,6 +1231,33 @@ void EnviarOrdemPendente(double pontosSL, double pontosTP)
 // false se o deal ainda não apareceu no histórico (para tentar de novo no próximo tick).
 // IMPORTANTE: se não encontrar, NÃO toca nenhum som - evita o bug de tocar "loss.wav"
 // por padrão quando o histórico ainda não sincronizou o deal de um TP recém-executado.
+// Adiciona um som na fila em vez de tocar na hora - ver comentário da declaração de
+// filaSons acima. O fallback "\\Audio\\..." (para quando o arquivo não está direto na
+// pasta Sounds) só é resolvido no momento em que o som realmente toca, não aqui.
+void EnfileirarSom(string nomeArquivo)
+{
+   int n = ArraySize(filaSons);
+   ArrayResize(filaSons, n + 1);
+   filaSons[n] = nomeArquivo;
+}
+
+// Chamada a cada ciclo (tick/timer, ~50ms). Libera no máximo um som da fila por vez,
+// respeitando INTERVALO_ENTRE_SONS_MS desde o último som tocado - assim o próximo só
+// começa depois que o anterior teve tempo de terminar, em vez de cortá-lo.
+void ProcessarFilaDeSons()
+{
+   if(ArraySize(filaSons) == 0) return;
+   if(GetTickCount() < proximoSomDaFilaLiberadoEm) return;
+
+   string arquivo = filaSons[0];
+   for(int i = 0; i < ArraySize(filaSons) - 1; i++)
+      filaSons[i] = filaSons[i + 1];
+   ArrayResize(filaSons, ArraySize(filaSons) - 1);
+
+   if(!PlaySound(arquivo)) PlaySound("\\Audio\\" + arquivo);
+   proximoSomDaFilaLiberadoEm = GetTickCount() + INTERVALO_ENTRE_SONS_MS;
+}
+
 bool TentarTocarSomSaida(ulong ticketPosicao)
 {
    datetime inicioDoDia = iTime(_Symbol, PERIOD_D1, 0);
@@ -1209,11 +1283,11 @@ bool TentarTocarSomSaida(ulong ticketPosicao)
 
       if(resultado > 0.0)
       {
-         if(!PlaySound("gain.wav")) PlaySound("\\Audio\\gain.wav");
+         EnfileirarSom("gain.wav");
       }
       else
       {
-         if(!PlaySound("loss.wav")) PlaySound("\\Audio\\loss.wav");
+         EnfileirarSom("loss.wav");
       }
       return true;
    }
@@ -1242,11 +1316,11 @@ void ProcessarSomDeSaidaPendente()
 
       if(ultimoLucroFlutuantePosicao > 0.0)
       {
-         if(!PlaySound("gain.wav")) PlaySound("\\Audio\\gain.wav");
+         EnfileirarSom("gain.wav");
       }
       else
       {
-         if(!PlaySound("loss.wav")) PlaySound("\\Audio\\loss.wav");
+         EnfileirarSom("loss.wav");
       }
       aguardandoSomSaida = false;
    }
@@ -1307,6 +1381,112 @@ void GarantirProtecaoDaPosicao()
          if(!PlaySound("errorPlacingOrder.wav")) PlaySound("\\Audio\\errorPlacingOrder.wav");
       }
    }
+}
+
+//+------------------------------------------------------------------+
+//| Posições em outros ativos suportados (WDO/WIN/CCM, o que não for  |
+//| o do gráfico atual) - exibição no painel e fechamento em massa.   |
+//+------------------------------------------------------------------+
+
+// Verdadeiro se QUALQUER posição aberta na conta pertence a algum ativo configurado em
+// ConfigsDisponiveis[] (WDO, WIN, CCM, ...) - inclui a do gráfico atual e as de outros.
+bool ExisteQualquerPosicaoAbertaSuportada()
+{
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      string simb = PositionGetString(POSITION_SYMBOL);
+      for(int c = 0; c < ArraySize(ConfigsDisponiveis); c++)
+         if(StringFind(simb, ConfigsDisponiveis[c].prefixoSimbolo) == 0)
+            return true;
+   }
+   return false;
+}
+
+// Fecha TODAS as posições abertas em ativos suportados - a do gráfico atual (reaproveitando
+// FecharPosicaoAberta(), pra manter o mesmo tratamento de estado/som do CTRL+Enter comum) e,
+// em seguida, as de qualquer outro ativo configurado que tenha posição aberta no momento.
+void FecharTodasAsPosicoesSuportadas()
+{
+   if(PositionSelect(_Symbol))
+      FecharPosicaoAberta();
+
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+
+      string simb = PositionGetString(POSITION_SYMBOL);
+      if(simb == _Symbol) continue; // essa já foi tratada acima (ou não é do ativo atual, segue a checagem)
+
+      bool suportado = false;
+      for(int c = 0; c < ArraySize(ConfigsDisponiveis); c++)
+         if(StringFind(simb, ConfigsDisponiveis[c].prefixoSimbolo) == 0) { suportado = true; break; }
+      if(!suportado) continue;
+
+      double lucroFlutuante = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+
+      if(trade.PositionClose(ticket))
+      {
+         if(lucroFlutuante > 0.0) { EnfileirarSom("gain.wav"); }
+         else                      { EnfileirarSom("loss.wav"); }
+      }
+      else
+      {
+         Print("[ERRO] Falha ao fechar posição de ", simb, " (ticket ", ticket, "). Retcode: ",
+               trade.ResultRetcode(), " - ", trade.ResultRetcodeDescription());
+         if(!PlaySound("errorPlacingOrder.wav")) PlaySound("\\Audio\\errorPlacingOrder.wav");
+      }
+   }
+}
+
+// Uma linha de posição extra-gráfico já formatada para exibição no painel.
+struct InfoPosicaoExtra
+{
+   string texto;
+   color  cor;
+};
+
+// Varre a conta procurando, para cada ativo suportado DIFERENTE do gráfico atual, uma
+// posição aberta - se achar, monta a linha de texto (com PnL) pro painel. No máximo uma
+// posição por ativo é considerada (é o comportamento normal de conta netting).
+int ColetarPosicoesExtraGrafico(InfoPosicaoExtra &out[])
+{
+   ArrayResize(out, 0);
+
+   for(int c = 0; c < ArraySize(ConfigsDisponiveis); c++)
+   {
+      if(StringFind(_Symbol, ConfigsDisponiveis[c].prefixoSimbolo) == 0) continue; // é o ativo do gráfico atual - já exibido acima
+
+      for(int i = PositionsTotal() - 1; i >= 0; i--)
+      {
+         ulong ticket = PositionGetTicket(i);
+         if(ticket == 0) continue;
+
+         string simb = PositionGetString(POSITION_SYMBOL);
+         if(StringFind(simb, ConfigsDisponiveis[c].prefixoSimbolo) != 0) continue;
+
+         long   tipoPos     = PositionGetInteger(POSITION_TYPE);
+         double vol         = PositionGetDouble(POSITION_VOLUME);
+         double lucro       = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+         int    volSinal    = (tipoPos == POSITION_TYPE_BUY) ? (int)vol : -(int)vol;
+
+         string valorFmt = DoubleToString(lucro, 2); StringReplace(valorFmt, ".", ",");
+
+         InfoPosicaoExtra info;
+         info.texto = StringFormat("Posição %s (%d %s) | PnL R$ %s",
+                         (tipoPos == POSITION_TYPE_BUY ? "comprada" : "vendida"), volSinal, simb, valorFmt);
+         info.cor = (lucro > 0.0) ? clrLimeGreen : (lucro < 0.0 ? clrRed : clrDarkGray);
+
+         int n = ArraySize(out);
+         ArrayResize(out, n + 1);
+         out[n] = info;
+         break; // já achou a posição desse ativo - vai para o próximo ativo configurado
+      }
+   }
+
+   return ArraySize(out);
 }
 
 void FecharPosicaoAberta()
@@ -1759,7 +1939,7 @@ void AtualizarPainelVisualEmTempoReal()
       string valorFormatado = DoubleToString(lucroFinanceiro, 2);
       StringReplace(valorFormatado, ".", ",");
 
-      textoPosicao = StringFormat("Posição %s (%d %s)", (tipoPos == POSITION_TYPE_BUY ? "comprada" : "vendida"), volumePosSinal, _Symbol);
+      textoPosicao = StringFormat("Posição %s (%d %s) | PnL R$ %s", (tipoPos == POSITION_TYPE_BUY ? "comprada" : "vendida"), volumePosSinal, _Symbol, valorFormatado);
       corPosicao = (volumePosSinal > 0) ? clrLimeGreen : (volumePosSinal < 0 ? clrRed : clrDarkGray);
 
       color corPnLGrafico = (lucroFinanceiro > 0.0) ? clrLimeGreen : (lucroFinanceiro < 0.0 ? clrRed : clrDarkGray);
@@ -1845,8 +2025,49 @@ void AtualizarPainelVisualEmTempoReal()
    CriarSeparador(PREFIX_TXT+"7",   MARGEM_DIREITA_TEXTO, GetLinhaY(7)+OffsetParaBaixo(7), LARGURA_SEPARADOR, clrSilver, cantoPainelAtual);
    CriarTextoLabel(PREFIX_TXT+"8",  textoPnLDiario,  MARGEM_DIREITA_TEXTO, GetLinhaY(8), 10, corPnLDiario, cantoPainelAtual);
    CriarTextoLabel(PREFIX_TXT+"9",  textoPosicao,    MARGEM_DIREITA_TEXTO, GetLinhaY(9), 10, corPosicao, cantoPainelAtual);
-   CriarTextoLabel(PREFIX_TXT+"10", textoStatus,     MARGEM_DIREITA_TEXTO, GetLinhaY(10), 10, corStatus, cantoPainelAtual);
-   CriarTextoLabel(PREFIX_TXT+"11", textoAtalhos,    MARGEM_DIREITA_TEXTO, GetLinhaY(11), 10, CorContrasteComFundo(), cantoPainelAtual);
+
+   // ---- Posições de outros ativos suportados (WDO/WIN/CCM, o que não for o do gráfico
+   // atual) - só aparecem (com separadores e o texto de instrução do atalho) quando há
+   // pelo menos uma posição aberta em outro ativo. GetLinhaY(9) é a posição do gráfico
+   // atual (acima); a partir de GetLinhaY(10) é onde esse bloco extra, de altura variável,
+   // é desenhado - e status/atalhos são empurrados para baixo dele quando ele aparece.
+   InfoPosicaoExtra posicoesExtra[];
+   int qtdExtras = ColetarPosicoesExtraGrafico(posicoesExtra);
+   int maxExtrasPossivel = ArraySize(ConfigsDisponiveis) - 1; // no máximo, todos os outros ativos configurados
+
+   int linhaBaseExtras = 10;
+   int linhasOcupadasPorExtras = (qtdExtras > 0) ? (2 /*separadores*/ + qtdExtras /*posições*/ + 1 /*instrução*/) : 0;
+   int linhaStatus  = linhaBaseExtras + linhasOcupadasPorExtras;
+   int linhaAtalhos = linhaStatus + 1;
+
+   if(qtdExtras > 0)
+   {
+      CriarSeparador(PREFIX_TXT+"EXTRA_SEP_A", MARGEM_DIREITA_TEXTO, GetLinhaY(linhaBaseExtras)+OffsetParaBaixo(7), LARGURA_SEPARADOR, clrSilver, cantoPainelAtual);
+
+      for(int i = 0; i < qtdExtras; i++)
+         CriarTextoLabel(PREFIX_TXT+"EXTRA_POS"+IntegerToString(i), posicoesExtra[i].texto,
+                          MARGEM_DIREITA_TEXTO, GetLinhaY(linhaBaseExtras+1+i), 10, posicoesExtra[i].cor, cantoPainelAtual);
+
+      CriarTextoLabel(PREFIX_TXT+"EXTRA_INSTR", "(CTRL+SPACE+Enter) Zera TODAS as posições",
+                       MARGEM_DIREITA_TEXTO, GetLinhaY(linhaBaseExtras+1+qtdExtras), 10, CorContrasteComFundo(), cantoPainelAtual);
+
+      CriarSeparador(PREFIX_TXT+"EXTRA_SEP_B", MARGEM_DIREITA_TEXTO, GetLinhaY(linhaBaseExtras+2+qtdExtras)+OffsetParaBaixo(7), LARGURA_SEPARADOR, clrSilver, cantoPainelAtual);
+   }
+   else
+   {
+      ObjectDelete(0, PREFIX_TXT+"EXTRA_SEP_A");
+      ObjectDelete(0, PREFIX_TXT+"EXTRA_INSTR");
+      ObjectDelete(0, PREFIX_TXT+"EXTRA_SEP_B");
+   }
+   // Remove objetos de posições extras que existiam num ciclo anterior mas não existem mais
+   // agora (ex.: fechou a posição do WDO e só sobrou a do CCM) - evita "lixo" gráfico.
+   for(int i = qtdExtras; i < maxExtrasPossivel; i++)
+      ObjectDelete(0, PREFIX_TXT+"EXTRA_POS"+IntegerToString(i));
+
+   totalLinhasPainelAtual = linhaAtalhos + 1; // usado por ObterRetanguloPainel no próximo ciclo
+
+   CriarTextoLabel(PREFIX_TXT+"10", textoStatus,     MARGEM_DIREITA_TEXTO, GetLinhaY(linhaStatus), 10, corStatus, cantoPainelAtual);
+   CriarTextoLabel(PREFIX_TXT+"11", textoAtalhos,    MARGEM_DIREITA_TEXTO, GetLinhaY(linhaAtalhos), 10, CorContrasteComFundo(), cantoPainelAtual);
    SetObjVisivel(PREFIX_TXT+"11", !algumLimiteAtingido);
 
    // Botões da linha 3 (índice 2) - troca de fase
