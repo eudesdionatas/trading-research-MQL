@@ -1940,7 +1940,7 @@ void AtualizarPainelVisualEmTempoReal()
       StringReplace(valorFormatado, ".", ",");
 
       textoPosicao = StringFormat("Posição %s (%d %s) | PnL R$ %s", (tipoPos == POSITION_TYPE_BUY ? "comprada" : "vendida"), volumePosSinal, _Symbol, valorFormatado);
-      corPosicao = (volumePosSinal > 0) ? clrLimeGreen : (volumePosSinal < 0 ? clrRed : clrDarkGray);
+      corPosicao = (lucroFinanceiro > 0.0) ? clrLimeGreen : (lucroFinanceiro < 0.0 ? clrRed : clrDarkGray);
 
       color corPnLGrafico = (lucroFinanceiro > 0.0) ? clrLimeGreen : (lucroFinanceiro < 0.0 ? clrRed : clrDarkGray);
       AtualizarLabelGraficoPreco(StringFormat("R$ %s", valorFormatado), corPnLGrafico, true);
