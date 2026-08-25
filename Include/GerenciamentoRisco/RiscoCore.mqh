@@ -81,6 +81,12 @@ int totalLinhasPainelAtual = 12;
 uint ultimoTickSpacePressionado = 0;
 const uint JANELA_COMBO_TECLAS_MS = 1500; // tolerância entre soltar o SPACE e apertar o ENTER
 
+// Detecção do botão "Zerar" (fecha TODAS as posições, alternativa ao CTRL+SPACE+ENTER só
+// pra quem prefere mouse): só funciona se a tecla 'E' estiver sendo segurada no instante
+// do clique - sem TERMINAL_KEYSTATE dedicado pra letras, mesmo mecanismo do SPACE acima:
+// guarda quando 'E' foi apertada por último e aceita o clique se isso foi recente.
+uint ultimoTickEPressionado = 0;
+
 // Fila de sons de gain/loss: como o PlaySound() só tem um canal de áudio, tocar dois sons
 // muito próximos no tempo faz o segundo CORTAR o primeiro antes dele terminar (não fica
 // represado, mas também não toca por completo) - isso fica evidente ao fechar várias
@@ -365,6 +371,11 @@ int OnInit()
    modificadorTipoOperacao = 0;
 
    for(int i=0; i<15; i++) ObjectDelete(0, PREFIX_TXT+IntegerToString(i));
+   ObjectDelete(0, PREFIX_TXT+"EXTRA_SEP_A");
+   ObjectDelete(0, PREFIX_TXT+"EXTRA_INSTR");
+   ObjectDelete(0, PREFIX_TXT+"EXTRA_SEP_B");
+   ObjectDelete(0, PREFIX_TXT+"SEP_STATUS");
+   for(int i=0; i<ArraySize(ConfigsDisponiveis)-1; i++) ObjectDelete(0, PREFIX_TXT+"EXTRA_POS"+IntegerToString(i));
    ObjectDelete(0, "Btn_FaseMenos");
    ObjectDelete(0, "Btn_FaseMais");
    ObjectDelete(0, "Btn_PapelMenos");
@@ -373,6 +384,7 @@ int OnInit()
    ObjectDelete(0, "Btn_NegMais");
    ObjectDelete(0, "Btn_PainelCima");
    ObjectDelete(0, "Btn_PainelBaixo");
+   ObjectDelete(0, "Btn_ZerarTudo");
 
    Print("==========================================================");
    Print("[SISTEMA PRONTO] Boleta de Fases carregada. Fase atual: ", faseAtual);
@@ -392,6 +404,11 @@ void OnDeinit(const int reason)
 
    ObjectDelete(0, LABEL_PRECO_POSICAO);
    for(int i=0; i<15; i++) ObjectDelete(0, PREFIX_TXT+IntegerToString(i));
+   ObjectDelete(0, PREFIX_TXT+"EXTRA_SEP_A");
+   ObjectDelete(0, PREFIX_TXT+"EXTRA_INSTR");
+   ObjectDelete(0, PREFIX_TXT+"EXTRA_SEP_B");
+   ObjectDelete(0, PREFIX_TXT+"SEP_STATUS");
+   for(int i=0; i<ArraySize(ConfigsDisponiveis)-1; i++) ObjectDelete(0, PREFIX_TXT+"EXTRA_POS"+IntegerToString(i));
    ObjectDelete(0, "Btn_FaseMenos");
    ObjectDelete(0, "Btn_FaseMais");
    ObjectDelete(0, "Btn_PapelMenos");
@@ -400,6 +417,7 @@ void OnDeinit(const int reason)
    ObjectDelete(0, "Btn_NegMais");
    ObjectDelete(0, "Btn_PainelCima");
    ObjectDelete(0, "Btn_PainelBaixo");
+   ObjectDelete(0, "Btn_ZerarTudo");
    Print("[INFO] Robô descarregado do gráfico.");
 }
 
@@ -503,6 +521,21 @@ void OnChartEvent(const int id, const long& lparam, const double& dparam, const 
          MoverPainelPara(CORNER_RIGHT_LOWER);
          ChartRedraw(0);
       }
+      else if(sparam == "Btn_ZerarTudo")
+      {
+         // Segurança equivalente ao CTRL+SPACE+ENTER, só que via mouse: o clique só age
+         // se a tecla 'E' estiver (ou tiver acabado de estar) pressionada - clicar nesse
+         // botão sem segurar 'E' não faz nada, de propósito.
+         bool eRecente = (GetTickCount() - ultimoTickEPressionado) <= JANELA_COMBO_TECLAS_MS;
+         if(eRecente && ExisteQualquerPosicaoAbertaSuportada())
+            FecharTodasAsPosicoesSuportadas();
+
+         // O MQL5 marca o botão como "pressionado" (mudando sua cor) automaticamente em
+         // QUALQUER clique, mesmo sem 'E'. Força o estado visual de volta, refletindo só
+         // se 'E' estava realmente pressionada - clique sem 'E' não deve colorir o botão.
+         ObjectSetInteger(0, "Btn_ZerarTudo", OBJPROP_STATE, eRecente);
+         ChartRedraw(0);
+      }
    }
 
    if(id == CHARTEVENT_KEYDOWN)
@@ -515,6 +548,11 @@ void OnChartEvent(const int id, const long& lparam, const double& dparam, const 
       if(tecla == 32) // Tecla 'SPACE'
       {
          ultimoTickSpacePressionado = GetTickCount();
+      }
+
+      if(tecla == 69 || tecla == 101) // Tecla 'E'
+      {
+         ultimoTickEPressionado = GetTickCount();
       }
 
       // (CTRL+ENTER) zera a posição aberta OU cancela a ordem pendente, não importa como
@@ -1477,7 +1515,7 @@ int ColetarPosicoesExtraGrafico(InfoPosicaoExtra &out[])
          InfoPosicaoExtra info;
          info.texto = StringFormat("Posição %s (%d %s) | PnL R$ %s",
                          (tipoPos == POSITION_TYPE_BUY ? "comprada" : "vendida"), volSinal, simb, valorFmt);
-         info.cor = (lucro > 0.0) ? clrLimeGreen : (lucro < 0.0 ? clrRed : clrDarkGray);
+         info.cor = (lucro > 0.0) ? clrLightGreen : (lucro < 0.0 ? clrLightSalmon : clrGainsboro );
 
          int n = ArraySize(out);
          ArrayResize(out, n + 1);
@@ -1741,6 +1779,26 @@ int CalcularOperacoesDoMes()
    return totalOpsMes;
 }
 
+// Preço de referência para a PRÉVIA (linhas de entrada/SL/TP) quando ela foi armada por C/V
+// (sem clique de mouse). Normalmente é o Ask/Bid ao vivo - mas em ativos menos líquidos
+// (ex.: CCM) pode não ter chegado nenhum tick ainda desde que o gráfico foi aberto, e
+// SYMBOL_ASK/SYMBOL_BID fica em 0, fazendo a prévia não ser desenhada. Nesse caso, cai para
+// o último preço negociado (SYMBOL_LAST) e, se nem esse existir, para o fechamento da última
+// barra já plotada - só para a prévia nunca ficar "sem desenhar nada" silenciosamente.
+// IMPORTANTE: usada só na prévia. O envio real da ordem (EnviarOrdemMercado/Pendente)
+// continua lendo Ask/Bid ao vivo diretamente, sem esse fallback - lá, se não houver
+// cotação, é correto que a ordem realmente não seja enviada.
+double ObterPrecoReferenciaMercado(bool compra)
+{
+   double preco = compra ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) : SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   if(preco > 0.0) return preco;
+
+   preco = SymbolInfoDouble(_Symbol, SYMBOL_LAST);
+   if(preco > 0.0) return preco;
+
+   return iClose(_Symbol, _Period, 0); // último recurso - pode ainda vir 0 se não houver histórico algum
+}
+
 void DefaultAtualizarLinhasCustomizadas()
 {
    double pontosSL = 0, pontosTP = 0;
@@ -1754,14 +1812,14 @@ void DefaultAtualizarLinhasCustomizadas()
 
    if(tipoOperacao == 1)
    {
-      precoReferencia = usarPrecoDoClique ? ArredondarParaPassoDoPreco(precoCliqueReferencia) : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+      precoReferencia = usarPrecoDoClique ? ArredondarParaPassoDoPreco(precoCliqueReferencia) : ObterPrecoReferenciaMercado(true);
       slProjetado     = precoReferencia - ConverterPontosParaPreco(pontosSL);
       tpProjetado     = precoReferencia + ConverterPontosParaPreco(pontosTP);
       corEntrada      = clrLimeGreen;
    }
    else if(tipoOperacao == 2)
    {
-      precoReferencia = usarPrecoDoClique ? ArredondarParaPassoDoPreco(precoCliqueReferencia) : SymbolInfoDouble(_Symbol, SYMBOL_BID);
+      precoReferencia = usarPrecoDoClique ? ArredondarParaPassoDoPreco(precoCliqueReferencia) : ObterPrecoReferenciaMercado(false);
       slProjetado     = precoReferencia + ConverterPontosParaPreco(pontosSL);
       tpProjetado     = precoReferencia - ConverterPontosParaPreco(pontosTP);
       corEntrada      = clrCrimson;
@@ -2023,46 +2081,72 @@ void AtualizarPainelVisualEmTempoReal()
    CriarTextoLabel(PREFIX_TXT+"5",  textoAcumulos,   MARGEM_DIREITA_TEXTO, GetLinhaY(5), 10, clrSteelBlue, cantoPainelAtual);
    CriarTextoLabel(PREFIX_TXT+"6",  textoNegocios,   MARGEM_DIREITA_TEXTO, GetLinhaY(6), 10, clrSteelBlue, cantoPainelAtual);
    CriarSeparador(PREFIX_TXT+"7",   MARGEM_DIREITA_TEXTO, GetLinhaY(7)+OffsetParaBaixo(7), LARGURA_SEPARADOR, clrSilver, cantoPainelAtual);
-   CriarTextoLabel(PREFIX_TXT+"8",  textoPnLDiario,  MARGEM_DIREITA_TEXTO, GetLinhaY(8), 10, corPnLDiario, cantoPainelAtual);
-   CriarTextoLabel(PREFIX_TXT+"9",  textoPosicao,    MARGEM_DIREITA_TEXTO, GetLinhaY(9), 10, corPosicao, cantoPainelAtual);
-
    // ---- Posições de outros ativos suportados (WDO/WIN/CCM, o que não for o do gráfico
    // atual) - só aparecem (com separadores e o texto de instrução do atalho) quando há
-   // pelo menos uma posição aberta em outro ativo. GetLinhaY(9) é a posição do gráfico
-   // atual (acima); a partir de GetLinhaY(10) é onde esse bloco extra, de altura variável,
-   // é desenhado - e status/atalhos são empurrados para baixo dele quando ele aparece.
+   // pelo menos uma posição aberta em outro ativo. Esse bloco agora vem LOGO ANTES da
+   // posição do gráfico atual/PnL diário (invertido em relação à ordem original), então é
+   // calculado primeiro, e tudo que vem depois (PnL diário, posição, status, atalhos) é
+   // deslocado dinamicamente pela altura que ele ocupar.
    InfoPosicaoExtra posicoesExtra[];
    int qtdExtras = ColetarPosicoesExtraGrafico(posicoesExtra);
    int maxExtrasPossivel = ArraySize(ConfigsDisponiveis) - 1; // no máximo, todos os outros ativos configurados
 
-   int linhaBaseExtras = 10;
-   int linhasOcupadasPorExtras = (qtdExtras > 0) ? (2 /*separadores*/ + qtdExtras /*posições*/ + 1 /*instrução*/) : 0;
-   int linhaStatus  = linhaBaseExtras + linhasOcupadasPorExtras;
-   int linhaAtalhos = linhaStatus + 1;
+   // O separador do índice 7 (logo acima) já serve de fronteira entre a seção Máx
+   // papéis/Fase e este bloco - por isso o bloco de extras NÃO tem mais separador próprio
+   // no topo (EXTRA_SEP_A foi removido; ele ficava colado ao separador do índice 7,
+   // formando dois separadores seguidos sem nada entre eles).
+   int linhaBaseExtras = 8; // logo após o separador do índice 7 (Máx papéis/Fase)
+   int linhasOcupadasPorExtras = (qtdExtras > 0) ? (qtdExtras /*posições*/ + 1 /*instrução*/ + 1 /*separador de baixo*/) : 0;
+
+   ObjectDelete(0, PREFIX_TXT+"EXTRA_SEP_A"); // não existe mais - remove eventual resíduo de uma versão anterior
 
    if(qtdExtras > 0)
    {
-      CriarSeparador(PREFIX_TXT+"EXTRA_SEP_A", MARGEM_DIREITA_TEXTO, GetLinhaY(linhaBaseExtras)+OffsetParaBaixo(7), LARGURA_SEPARADOR, clrSilver, cantoPainelAtual);
+      // Instrução sempre no índice MAIS BAIXO do bloco - ou seja, sempre na ponta do bloco
+      // mais próxima da borda em que o painel está ancorado. Isso a coloca na PRIMEIRA
+      // linha do bloco quando o painel está no canto SUPERIOR (índice baixo = perto do
+      // topo) e na ÚLTIMA linha do bloco quando está no canto INFERIOR (índice baixo =
+      // perto da borda de baixo) - nos dois casos, sempre na ponta, nunca no meio.
+      CriarTextoLabel(PREFIX_TXT+"EXTRA_INSTR", "(E+Clique ou CTRL+SPACE+Enter) Zera TUDO",
+                       MARGEM_DIREITA_TEXTO, GetLinhaY(linhaBaseExtras), 10, CorContrasteComFundo(), cantoPainelAtual);
 
-      for(int i = 0; i < qtdExtras; i++)
+      // Todas as posições vêm depois da instrução, deslocadas uma linha - EXCETO a última,
+      // que divide linha com o botão "Zerar" (texto curto o bastante pra não colidir com ele).
+      for(int i = 0; i < qtdExtras - 1; i++)
          CriarTextoLabel(PREFIX_TXT+"EXTRA_POS"+IntegerToString(i), posicoesExtra[i].texto,
                           MARGEM_DIREITA_TEXTO, GetLinhaY(linhaBaseExtras+1+i), 10, posicoesExtra[i].cor, cantoPainelAtual);
 
-      CriarTextoLabel(PREFIX_TXT+"EXTRA_INSTR", "(CTRL+SPACE+Enter) Zera TODAS as posições",
-                       MARGEM_DIREITA_TEXTO, GetLinhaY(linhaBaseExtras+1+qtdExtras), 10, CorContrasteComFundo(), cantoPainelAtual);
+      // Alternativa ao CTRL+SPACE+ENTER pra quem prefere mouse; o clique só age com 'E'
+      // pressionada (ver CHARTEVENT_OBJECT_CLICK) - sem 'E', não faz nada.
+      int idxUltimaPos = qtdExtras - 1;
+      CriarTextoLabel(PREFIX_TXT+"EXTRA_POS"+IntegerToString(idxUltimaPos), posicoesExtra[idxUltimaPos].texto,
+                       MARGEM_DIREITA_TEXTO, GetLinhaY(linhaBaseExtras+qtdExtras), 10, posicoesExtra[idxUltimaPos].cor, cantoPainelAtual);
+      CriarBotaoFase("Btn_ZerarTudo", "Zerar", 72, GetLinhaY(linhaBaseExtras+qtdExtras), 40, 18);
 
-      CriarSeparador(PREFIX_TXT+"EXTRA_SEP_B", MARGEM_DIREITA_TEXTO, GetLinhaY(linhaBaseExtras+2+qtdExtras)+OffsetParaBaixo(7), LARGURA_SEPARADOR, clrSilver, cantoPainelAtual);
+      CriarSeparador(PREFIX_TXT+"EXTRA_SEP_B", MARGEM_DIREITA_TEXTO, GetLinhaY(linhaBaseExtras+1+qtdExtras)+OffsetParaBaixo(7), LARGURA_SEPARADOR, clrSilver, cantoPainelAtual);
    }
    else
    {
-      ObjectDelete(0, PREFIX_TXT+"EXTRA_SEP_A");
       ObjectDelete(0, PREFIX_TXT+"EXTRA_INSTR");
+      ObjectDelete(0, "Btn_ZerarTudo");
       ObjectDelete(0, PREFIX_TXT+"EXTRA_SEP_B");
    }
    // Remove objetos de posições extras que existiam num ciclo anterior mas não existem mais
    // agora (ex.: fechou a posição do WDO e só sobrou a do CCM) - evita "lixo" gráfico.
    for(int i = qtdExtras; i < maxExtrasPossivel; i++)
       ObjectDelete(0, PREFIX_TXT+"EXTRA_POS"+IntegerToString(i));
+
+   // PnL diário + Posição do gráfico atual agora vêm DEPOIS do bloco de extras (antes vinham
+   // antes) - a linha exata depende de quantas linhas o bloco de extras ocupou acima.
+   int linhaPnLDiario  = linhaBaseExtras + linhasOcupadasPorExtras;
+   int linhaPosicao    = linhaPnLDiario + 1;
+   int linhaSepStatus  = linhaPosicao + 1; // separador entre a posição/PnL diário e o status/atalhos
+   int linhaStatus     = linhaSepStatus + 1;
+   int linhaAtalhos    = linhaStatus + 1;
+
+   CriarTextoLabel(PREFIX_TXT+"8",  textoPnLDiario,  MARGEM_DIREITA_TEXTO, GetLinhaY(linhaPnLDiario), 10, corPnLDiario, cantoPainelAtual);
+   CriarTextoLabel(PREFIX_TXT+"9",  textoPosicao,    MARGEM_DIREITA_TEXTO, GetLinhaY(linhaPosicao), 10, corPosicao, cantoPainelAtual);
+   CriarSeparador(PREFIX_TXT+"SEP_STATUS", MARGEM_DIREITA_TEXTO, GetLinhaY(linhaSepStatus)+OffsetParaBaixo(7), LARGURA_SEPARADOR, clrSilver, cantoPainelAtual);
 
    totalLinhasPainelAtual = linhaAtalhos + 1; // usado por ObterRetanguloPainel no próximo ciclo
 
@@ -2082,9 +2166,10 @@ void AtualizarPainelVisualEmTempoReal()
    CriarBotaoFase("Btn_NegMenos", "-2", 89, GetLinhaY(6), 28, 16);
    CriarBotaoFase("Btn_NegMais",  "+2", 60,  GetLinhaY(6), 28, 16);
 
-   // Botões da linha 9 (índice 8) - mover painel para cima/baixo (apenas um visível por vez)
-   CriarBotaoFase("Btn_PainelBaixo", "▼", 60, GetLinhaY(8), 28, 16);
-   CriarBotaoFase("Btn_PainelCima",  "▲", 60, GetLinhaY(8), 28, 16);
+   // Botões de mover painel para cima/baixo (apenas um visível por vez) - ficam na linha do
+   // PnL diário, que agora é dinâmica (o bloco de posições extra-gráfico pode empurrá-la).
+   CriarBotaoFase("Btn_PainelBaixo", "▼", 60, GetLinhaY(linhaPnLDiario), 28, 16);
+   CriarBotaoFase("Btn_PainelCima",  "▲", 60, GetLinhaY(linhaPnLDiario), 28, 16);
    SetObjVisivel("Btn_PainelBaixo", cantoPainelAtual == CORNER_RIGHT_UPPER);
    SetObjVisivel("Btn_PainelCima",  cantoPainelAtual == CORNER_RIGHT_LOWER);
 
