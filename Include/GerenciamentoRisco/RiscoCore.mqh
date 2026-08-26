@@ -2154,7 +2154,7 @@ void AtualizarPainelVisualEmTempoReal()
       pnlDiarioTotalTodos += CalcularResultadoFinanceiroDoDiaPorPrefixo(ConfigsDisponiveis[c].prefixoSimbolo);
    }
    string strPnLTotal = DoubleToString(pnlDiarioTotalTodos, 2); StringReplace(strPnLTotal, ".", ",");
-   string textoPnLTotal = StringFormat("PnL diário TOTAL: R$ %s", strPnLTotal);
+   string textoPnLTotal = StringFormat("PnL diário GERAL: R$ %s", strPnLTotal);
    color corPnLTotal = (pnlDiarioTotalTodos > 0.0) ? clrLimeGreen : (pnlDiarioTotalTodos < 0.0 ? C'252,70,70' : clrDarkGray);
 
    // O separador do índice 7 (logo acima) já serve de fronteira entre a seção Máx
