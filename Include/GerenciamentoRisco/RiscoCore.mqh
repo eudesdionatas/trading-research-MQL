@@ -73,24 +73,22 @@ ENUM_BASE_CORNER cantoPainelAtual = CORNER_RIGHT_UPPER;
 // o painel mesmo quando ele cresce/encolhe dinamicamente.
 int totalLinhasPainelAtual = 12;
 
-// Detecção do atalho CTRL+SPACE+ENTER ("zera TODAS as posições suportadas"). O MQL5 não
-// expõe um TERMINAL_KEYSTATE_SPACE (só existe para um conjunto fixo de teclas especiais),
-// então em vez de checar "SPACE está pressionada agora", guardamos QUANDO ela foi apertada
-// pela última vez (via GetTickCount(), em milissegundos) e, no keydown do ENTER, aceitamos
-// o combo se SPACE tiver sido pressionada há pouco tempo (com CTRL ainda segurado).
-uint ultimoTickSpacePressionado = 0;
-const uint JANELA_COMBO_TECLAS_MS = 1500; // tolerância entre soltar o SPACE e apertar o ENTER
+// Atalho CTRL+ESC+ENTER ("zera TODAS as posições suportadas") e botão "Zerar" (mesma ação
+// via mouse, com ESC+Clique) - ESC tem TERMINAL_KEYSTATE_ESCAPE nativo no MQL5, então dá
+// pra checar "está pressionada agora?" direto, sem precisar do truque de GetTickCount()
+// que SPACE/E exigiam (por não terem um estado dedicado).
 
-// Detecção do botão "Zerar" (fecha TODAS as posições, alternativa ao CTRL+SPACE+ENTER só
-// pra quem prefere mouse): só funciona se a tecla 'E' estiver sendo segurada no instante
-// do clique - sem TERMINAL_KEYSTATE dedicado pra letras, mesmo mecanismo do SPACE acima:
-// guarda quando 'E' foi apertada por último e aceita o clique se isso foi recente.
-uint ultimoTickEPressionado = 0;
+// Reset visual "atrasado" dos botões: em vez de voltar ao estado normal no mesmo instante
+// do clique (rápido demais pra perceber), o botão clicado fica marcado como "pressionado"
+// por DURACAO_VISUAL_CLIQUE_MS antes de ser resetado - dando um flash visual perceptível.
+string botaoPendenteDeReset = "";
+uint   tickBotaoPendenteDeReset = 0;
+const uint DURACAO_VISUAL_CLIQUE_MS = 100;
 
 // Fila de sons de gain/loss: como o PlaySound() só tem um canal de áudio, tocar dois sons
 // muito próximos no tempo faz o segundo CORTAR o primeiro antes dele terminar (não fica
 // represado, mas também não toca por completo) - isso fica evidente ao fechar várias
-// posições de uma vez (ex.: CTRL+SPACE+ENTER). Em vez de tocar na hora, essas chamadas
+// posições de uma vez (ex.: CTRL+ESC+ENTER). Em vez de tocar na hora, essas chamadas
 // entram numa fila e são liberadas uma de cada vez, respeitando um intervalo mínimo.
 string filaSons[];
 uint   proximoSomDaFilaLiberadoEm = 0;
@@ -372,6 +370,7 @@ int OnInit()
 
    for(int i=0; i<15; i++) ObjectDelete(0, PREFIX_TXT+IntegerToString(i));
    ObjectDelete(0, PREFIX_TXT+"EXTRA_SEP_A");
+   ObjectDelete(0, PREFIX_TXT+"EXTRA_PNL_TOTAL");
    ObjectDelete(0, PREFIX_TXT+"EXTRA_INSTR");
    ObjectDelete(0, PREFIX_TXT+"EXTRA_SEP_B");
    ObjectDelete(0, PREFIX_TXT+"SEP_STATUS");
@@ -405,6 +404,7 @@ void OnDeinit(const int reason)
    ObjectDelete(0, LABEL_PRECO_POSICAO);
    for(int i=0; i<15; i++) ObjectDelete(0, PREFIX_TXT+IntegerToString(i));
    ObjectDelete(0, PREFIX_TXT+"EXTRA_SEP_A");
+   ObjectDelete(0, PREFIX_TXT+"EXTRA_PNL_TOTAL");
    ObjectDelete(0, PREFIX_TXT+"EXTRA_INSTR");
    ObjectDelete(0, PREFIX_TXT+"EXTRA_SEP_B");
    ObjectDelete(0, PREFIX_TXT+"SEP_STATUS");
@@ -446,6 +446,7 @@ void ProcessarRotinasDeAtualizacao()
    ProcessarSomDeSaidaPendente();
    GarantirProtecaoDaPosicao();
    ProcessarFilaDeSons();
+   ProcessarResetVisualDeBotoes();
 }
 
 void VerificarTrocaDeDia()
@@ -473,6 +474,18 @@ void OnChartEvent(const int id, const long& lparam, const double& dparam, const 
 
    if(id == CHARTEVENT_OBJECT_CLICK)
    {
+      // Todo botão deve voltar ao estado normal em algum momento (sem isso, o OBJ_BUTTON do
+      // MQL5 fica "preso" com a aparência pressionada) - mas resetar no mesmo instante do
+      // clique é rápido demais pra perceber. Em vez disso, enfileira o reset pra acontecer
+      // ~150ms depois (ProcessarResetVisualDeBotoes), dando um flash visual perceptível.
+      // Genérico pra qualquer "Btn_*" (inclusive futuros); Btn_ZerarTudo é tratado à parte
+      // mais abaixo, porque seu reset depende de 'E' ter sido pressionada ou não.
+      if(StringFind(sparam, "Btn_") == 0 && sparam != "Btn_ZerarTudo")
+      {
+         botaoPendenteDeReset = sparam;
+         tickBotaoPendenteDeReset = GetTickCount();
+      }
+
       if(sparam == "Btn_FaseMenos")
       {
          if(faseAtual > 1) faseAtual--;
@@ -523,17 +536,26 @@ void OnChartEvent(const int id, const long& lparam, const double& dparam, const 
       }
       else if(sparam == "Btn_ZerarTudo")
       {
-         // Segurança equivalente ao CTRL+SPACE+ENTER, só que via mouse: o clique só age
-         // se a tecla 'E' estiver (ou tiver acabado de estar) pressionada - clicar nesse
-         // botão sem segurar 'E' não faz nada, de propósito.
-         bool eRecente = (GetTickCount() - ultimoTickEPressionado) <= JANELA_COMBO_TECLAS_MS;
-         if(eRecente && ExisteQualquerPosicaoAbertaSuportada())
+         // Segurança equivalente ao CTRL+ESC+ENTER, só que via mouse: o clique só age se
+         // a tecla 'ESC' estiver pressionada no instante do clique - clicar nesse botão
+         // sem segurar 'ESC' não faz nada, de propósito.
+         bool escPressionado = (TerminalInfoInteger(TERMINAL_KEYSTATE_ESCAPE) < 0);
+         if(escPressionado && ExisteQualquerPosicaoAbertaSuportada())
             FecharTodasAsPosicoesSuportadas();
 
          // O MQL5 marca o botão como "pressionado" (mudando sua cor) automaticamente em
-         // QUALQUER clique, mesmo sem 'E'. Força o estado visual de volta, refletindo só
-         // se 'E' estava realmente pressionada - clique sem 'E' não deve colorir o botão.
-         ObjectSetInteger(0, "Btn_ZerarTudo", OBJPROP_STATE, eRecente);
+         // QUALQUER clique, mesmo sem 'ESC'. Só deixa o flash visual acontecer quando
+         // 'ESC' estava realmente pressionada (mesmo reset atrasado dos demais botões, pra
+         // dar tempo de perceber); sem 'ESC', volta ao normal na hora - não chega a "piscar".
+         if(escPressionado)
+         {
+            botaoPendenteDeReset = "Btn_ZerarTudo";
+            tickBotaoPendenteDeReset = GetTickCount();
+         }
+         else
+         {
+            ObjectSetInteger(0, "Btn_ZerarTudo", OBJPROP_STATE, false);
+         }
          ChartRedraw(0);
       }
    }
@@ -542,33 +564,20 @@ void OnChartEvent(const int id, const long& lparam, const double& dparam, const 
    {
       int tecla = (int)lparam;
 
-      // SPACE não tem um TERMINAL_KEYSTATE dedicado no MQL5 - guardamos só o instante em
-      // que foi apertada, para o combo CTRL+SPACE+ENTER (abaixo) reconhecer "SPACE foi
-      // pressionada há pouco, com CTRL ainda segurado" no momento do ENTER.
-      if(tecla == 32) // Tecla 'SPACE'
-      {
-         ultimoTickSpacePressionado = GetTickCount();
-      }
-
-      if(tecla == 69 || tecla == 101) // Tecla 'E'
-      {
-         ultimoTickEPressionado = GetTickCount();
-      }
-
       // (CTRL+ENTER) zera a posição aberta OU cancela a ordem pendente, não importa como
       // foi armada (C, V ou SHIFT/CTRL) - tem prioridade sobre "enviar uma nova ordem"
       // sempre que já existir uma posição/ordem pendente. Funciona mesmo com os limites
       // diários já atingidos.
       //
-      // (CTRL+SPACE+ENTER) zera TODAS as posições abertas em ativos suportados (WDO/WIN/
+      // (CTRL+ESC+ENTER) zera TODAS as posições abertas em ativos suportados (WDO/WIN/
       // CCM), inclusive as de outros papéis exibidas no painel - checado ANTES do CTRL+
       // Enter "normal", já que é o combo mais específico dos dois.
       if(tecla == 13)
       {
-         bool ctrlPressionado  = (TerminalInfoInteger(TERMINAL_KEYSTATE_CONTROL) < 0);
-         bool spaceRecente     = (GetTickCount() - ultimoTickSpacePressionado) <= JANELA_COMBO_TECLAS_MS;
+         bool ctrlPressionado = (TerminalInfoInteger(TERMINAL_KEYSTATE_CONTROL) < 0);
+         bool escPressionado  = (TerminalInfoInteger(TERMINAL_KEYSTATE_ESCAPE) < 0);
 
-         if(ctrlPressionado && spaceRecente && ExisteQualquerPosicaoAbertaSuportada())
+         if(ctrlPressionado && escPressionado && ExisteQualquerPosicaoAbertaSuportada())
          {
             FecharTodasAsPosicoesSuportadas();
             return;
@@ -1282,6 +1291,18 @@ void EnfileirarSom(string nomeArquivo)
 // Chamada a cada ciclo (tick/timer, ~50ms). Libera no máximo um som da fila por vez,
 // respeitando INTERVALO_ENTRE_SONS_MS desde o último som tocado - assim o próximo só
 // começa depois que o anterior teve tempo de terminar, em vez de cortá-lo.
+// Chamada a cada ciclo (~50ms). Se algum botão estiver com o reset visual pendente e já
+// tiver passado DURACAO_VISUAL_CLIQUE_MS desde o clique, volta ele ao estado normal.
+void ProcessarResetVisualDeBotoes()
+{
+   if(botaoPendenteDeReset == "") return;
+   if(GetTickCount() - tickBotaoPendenteDeReset < DURACAO_VISUAL_CLIQUE_MS) return;
+
+   ObjectSetInteger(0, botaoPendenteDeReset, OBJPROP_STATE, false);
+   botaoPendenteDeReset = "";
+   ChartRedraw(0);
+}
+
 void ProcessarFilaDeSons()
 {
    if(ArraySize(filaSons) == 0) return;
@@ -1603,6 +1624,38 @@ void CalcularMetricasDoDia()
    }
 }
 
+// Mesma lógica de CalcularResultadoFinanceiroDoDia(), mas filtrando por PREFIXO do símbolo
+// em vez do _Symbol exato do gráfico atual - usada para somar o resultado do dia de outros
+// ativos suportados (WDO/WIN/CCM) no "PnL diário TOTAL" do painel, sem depender de haver
+// uma posição aberta selecionada naquele ativo (funciona só com o histórico de negócios).
+double CalcularResultadoFinanceiroDoDiaPorPrefixo(string prefixo)
+{
+   datetime inicioDoDia = iTime(_Symbol, PERIOD_D1, 0);
+   double lucroTotalDia = 0.0;
+
+   HistorySelect(inicioDoDia, TimeCurrent());
+   int totalDeals = HistoryDealsTotal();
+
+   for(int i = 0; i < totalDeals; i++)
+   {
+      ulong ticketDeal = HistoryDealGetTicket(i);
+      if(ticketDeal > 0)
+      {
+         string ativoDeal = HistoryDealGetString(ticketDeal, DEAL_SYMBOL);
+         if(StringFind(ativoDeal, prefixo) == 0)
+         {
+            double lucroDeal    = HistoryDealGetDouble(ticketDeal, DEAL_PROFIT);
+            double swapDeal     = HistoryDealGetDouble(ticketDeal, DEAL_SWAP);
+            double comissaoDeal = HistoryDealGetDouble(ticketDeal, DEAL_COMMISSION);
+
+            lucroTotalDia += (lucroDeal + swapDeal + comissaoDeal);
+         }
+      }
+   }
+
+   return lucroTotalDia;
+}
+
 double CalcularResultadoFinanceiroDoDia()
 {
    datetime inicioDoDia = iTime(_Symbol, PERIOD_D1, 0);
@@ -1828,7 +1881,7 @@ void DefaultAtualizarLinhasCustomizadas()
    if(precoReferencia <= 0) return;
 
    DesenharLinhaH(PREFIX_OBJ+"Entrada", precoReferencia, corEntrada, STYLE_SOLID, 1);
-   DesenharLinhaH(PREFIX_OBJ+"Loss",    slProjetado, clrRed, STYLE_DOT, 1);
+   DesenharLinhaH(PREFIX_OBJ+"Loss",    slProjetado, C'252,70,70', STYLE_DOT, 1);
    DesenharLinhaH(PREFIX_OBJ+"Gain",    tpProjetado, clrLimeGreen, STYLE_DOT, 1);
    ChartRedraw(0);
 }
@@ -1998,9 +2051,9 @@ void AtualizarPainelVisualEmTempoReal()
       StringReplace(valorFormatado, ".", ",");
 
       textoPosicao = StringFormat("Posição %s (%d %s) | PnL R$ %s", (tipoPos == POSITION_TYPE_BUY ? "comprada" : "vendida"), volumePosSinal, _Symbol, valorFormatado);
-      corPosicao = (lucroFinanceiro > 0.0) ? clrLimeGreen : (lucroFinanceiro < 0.0 ? clrRed : clrDarkGray);
+      corPosicao = (lucroFinanceiro > 0.0) ? clrLimeGreen : (lucroFinanceiro < 0.0 ? C'252,70,70' : clrDarkGray);
 
-      color corPnLGrafico = (lucroFinanceiro > 0.0) ? clrLimeGreen : (lucroFinanceiro < 0.0 ? clrRed : clrDarkGray);
+      color corPnLGrafico = (lucroFinanceiro > 0.0) ? clrLimeGreen : (lucroFinanceiro < 0.0 ? C'252,70,70' : clrDarkGray);
       AtualizarLabelGraficoPreco(StringFormat("R$ %s", valorFormatado), corPnLGrafico, true);
    }
    else
@@ -2023,7 +2076,7 @@ void AtualizarPainelVisualEmTempoReal()
    string strTotalDia = DoubleToString(totalDoDia, 2); StringReplace(strTotalDia, ".", ",");
    string strPontosDia = DoubleToString(totalPontosDia, cfgAtiva.casasDecimaisFase); StringReplace(strPontosDia, ".", ",");
    string textoPnLDiario = StringFormat("PnL diário: R$ %s | %s %s | Ordens: %d", strTotalDia, strPontosDia, cfgAtiva.unidadePontosLabel, operacoesDiaCount);
-   color corPnLDiario = (totalDoDia > 0.0) ? clrLimeGreen : (totalDoDia < 0.0 ? clrRed : clrDarkGray);
+   color corPnLDiario = (totalDoDia > 0.0) ? clrLimeGreen : (totalDoDia < 0.0 ? C'252,70,70' : clrDarkGray);
 
    // ---- PnL mensal ----
    double totalDoMes = CalcularResultadoFinanceiroDoMes();
@@ -2031,7 +2084,7 @@ void AtualizarPainelVisualEmTempoReal()
    string strTotalMes = DoubleToString(totalDoMes, 2); StringReplace(strTotalMes, ".", ",");
    string strPontosMes = DoubleToString(totalPontosMes, cfgAtiva.casasDecimaisFase); StringReplace(strPontosMes, ".", ",");
    string textoPnLMensal = StringFormat("PnL mensal: R$ %s | %s %s | Ordens: %d", strTotalMes, strPontosMes, cfgAtiva.unidadePontosLabel, CalcularOperacoesDoMes());
-   color corPnLMensal = (totalDoMes > 0.0) ? clrLimeGreen : (totalDoMes < 0.0 ? clrRed : clrDarkGray);
+   color corPnLMensal = (totalDoMes > 0.0) ? clrLimeGreen : (totalDoMes < 0.0 ? C'252,70,70' : clrDarkGray);
 
    // ---- Fase / SL / TP ----
    double exSL = 0, exTP = 0;
@@ -2091,46 +2144,58 @@ void AtualizarPainelVisualEmTempoReal()
    int qtdExtras = ColetarPosicoesExtraGrafico(posicoesExtra);
    int maxExtrasPossivel = ArraySize(ConfigsDisponiveis) - 1; // no máximo, todos os outros ativos configurados
 
+   // PnL diário TOTAL = PnL diário do gráfico atual + PnL diário (realizado) de cada outro
+   // ativo suportado, buscado por PREFIXO no histórico - funciona mesmo sem posição aberta
+   // naquele ativo no momento (basta ter havido negócio hoje).
+   double pnlDiarioTotalTodos = pnlDiarioAtual;
+   for(int c = 0; c < ArraySize(ConfigsDisponiveis); c++)
+   {
+      if(StringFind(_Symbol, ConfigsDisponiveis[c].prefixoSimbolo) == 0) continue; // já contado acima
+      pnlDiarioTotalTodos += CalcularResultadoFinanceiroDoDiaPorPrefixo(ConfigsDisponiveis[c].prefixoSimbolo);
+   }
+   string strPnLTotal = DoubleToString(pnlDiarioTotalTodos, 2); StringReplace(strPnLTotal, ".", ",");
+   string textoPnLTotal = StringFormat("PnL diário TOTAL: R$ %s", strPnLTotal);
+   color corPnLTotal = (pnlDiarioTotalTodos > 0.0) ? clrLimeGreen : (pnlDiarioTotalTodos < 0.0 ? C'252,70,70' : clrDarkGray);
+
    // O separador do índice 7 (logo acima) já serve de fronteira entre a seção Máx
-   // papéis/Fase e este bloco - por isso o bloco de extras NÃO tem mais separador próprio
-   // no topo (EXTRA_SEP_A foi removido; ele ficava colado ao separador do índice 7,
-   // formando dois separadores seguidos sem nada entre eles).
-   int linhaBaseExtras = 8; // logo após o separador do índice 7 (Máx papéis/Fase)
-   int linhasOcupadasPorExtras = (qtdExtras > 0) ? (qtdExtras /*posições*/ + 1 /*instrução*/ + 1 /*separador de baixo*/) : 0;
+   // papéis/Fase e este bloco - por isso o bloco de extras NÃO tem separador próprio no
+   // topo (EXTRA_SEP_A foi removido, ficava colado ao separador do índice 7).
+   //
+   // Layout deste bloco (sempre nesta ordem, de cima pra baixo quando o painel está no
+   // canto superior): PnL diário TOTAL (SEMPRE visível) -> posições extra-gráfico (só se
+   // houver alguma aberta) -> instrução + botão "Zerar" na mesma linha (só se houver
+   // posição extra-gráfico aberta) -> separador (sempre, fronteira com o bloco seguinte).
+   int linhaBaseExtras = 8; // linha do "PnL diário TOTAL", sempre presente
+   int linhasOcupadasPorExtras = 1 /*PnL diário TOTAL*/ + (qtdExtras > 0 ? (qtdExtras + 1 /*instrução*/) : 0) + 1 /*separador*/;
 
    ObjectDelete(0, PREFIX_TXT+"EXTRA_SEP_A"); // não existe mais - remove eventual resíduo de uma versão anterior
 
+   CriarTextoLabel(PREFIX_TXT+"EXTRA_PNL_TOTAL", textoPnLTotal,
+                    MARGEM_DIREITA_TEXTO, GetLinhaY(linhaBaseExtras), 10, corPnLTotal, cantoPainelAtual);
+
    if(qtdExtras > 0)
    {
-      // Instrução sempre no índice MAIS BAIXO do bloco - ou seja, sempre na ponta do bloco
-      // mais próxima da borda em que o painel está ancorado. Isso a coloca na PRIMEIRA
-      // linha do bloco quando o painel está no canto SUPERIOR (índice baixo = perto do
-      // topo) e na ÚLTIMA linha do bloco quando está no canto INFERIOR (índice baixo =
-      // perto da borda de baixo) - nos dois casos, sempre na ponta, nunca no meio.
-      CriarTextoLabel(PREFIX_TXT+"EXTRA_INSTR", "(E+Clique ou CTRL+SPACE+Enter) Zera TUDO",
-                       MARGEM_DIREITA_TEXTO, GetLinhaY(linhaBaseExtras), 10, CorContrasteComFundo(), cantoPainelAtual);
-
-      // Todas as posições vêm depois da instrução, deslocadas uma linha - EXCETO a última,
-      // que divide linha com o botão "Zerar" (texto curto o bastante pra não colidir com ele).
-      for(int i = 0; i < qtdExtras - 1; i++)
+      // Todas as posições extras em linhas normais, uma por uma.
+      for(int i = 0; i < qtdExtras; i++)
          CriarTextoLabel(PREFIX_TXT+"EXTRA_POS"+IntegerToString(i), posicoesExtra[i].texto,
                           MARGEM_DIREITA_TEXTO, GetLinhaY(linhaBaseExtras+1+i), 10, posicoesExtra[i].cor, cantoPainelAtual);
 
-      // Alternativa ao CTRL+SPACE+ENTER pra quem prefere mouse; o clique só age com 'E'
-      // pressionada (ver CHARTEVENT_OBJECT_CLICK) - sem 'E', não faz nada.
-      int idxUltimaPos = qtdExtras - 1;
-      CriarTextoLabel(PREFIX_TXT+"EXTRA_POS"+IntegerToString(idxUltimaPos), posicoesExtra[idxUltimaPos].texto,
-                       MARGEM_DIREITA_TEXTO, GetLinhaY(linhaBaseExtras+qtdExtras), 10, posicoesExtra[idxUltimaPos].cor, cantoPainelAtual);
-      CriarBotaoFase("Btn_ZerarTudo", "Zerar", 72, GetLinhaY(linhaBaseExtras+qtdExtras), 40, 18);
-
-      CriarSeparador(PREFIX_TXT+"EXTRA_SEP_B", MARGEM_DIREITA_TEXTO, GetLinhaY(linhaBaseExtras+1+qtdExtras)+OffsetParaBaixo(7), LARGURA_SEPARADOR, clrSilver, cantoPainelAtual);
+      // Instrução + botão "Zerar" na última linha do bloco. Alternativa ao CTRL+ESC+ENTER
+      // pra quem prefere mouse; o clique só age com 'ESC' pressionada (ver
+      // CHARTEVENT_OBJECT_CLICK) - sem 'ESC', não faz nada.
+      CriarTextoLabel(PREFIX_TXT+"EXTRA_INSTR", "(ESC+Clique ou CTRL+ESC+Enter) Zera TUDO",
+                       MARGEM_DIREITA_TEXTO, GetLinhaY(linhaBaseExtras+1+qtdExtras), 10, CorContrasteComFundo(), cantoPainelAtual);
+      CriarBotaoFase("Btn_ZerarTudo", "Zerar", 72, GetLinhaY(linhaBaseExtras+1+qtdExtras), 40, 18);
    }
    else
    {
       ObjectDelete(0, PREFIX_TXT+"EXTRA_INSTR");
       ObjectDelete(0, "Btn_ZerarTudo");
-      ObjectDelete(0, PREFIX_TXT+"EXTRA_SEP_B");
    }
+   // Separador de baixo do bloco - SEMPRE presente agora (o PnL diário TOTAL também é
+   // sempre mostrado, então o bloco nunca fica totalmente vazio).
+   CriarSeparador(PREFIX_TXT+"EXTRA_SEP_B", MARGEM_DIREITA_TEXTO, GetLinhaY(linhaBaseExtras+linhasOcupadasPorExtras-1)+OffsetParaBaixo(7), LARGURA_SEPARADOR, clrSilver, cantoPainelAtual);
+
    // Remove objetos de posições extras que existiam num ciclo anterior mas não existem mais
    // agora (ex.: fechou a posição do WDO e só sobrou a do CCM) - evita "lixo" gráfico.
    for(int i = qtdExtras; i < maxExtrasPossivel; i++)
