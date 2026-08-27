@@ -590,10 +590,18 @@ void OnChartEvent(const int id, const long& lparam, const double& dparam, const 
          }
       }
 
+      // Sozinho, ESC cancela uma ordem armada (prévia de entrada/SL/TP). Mas ESC também é
+      // modificador do combo CTRL+ESC+ENTER - se CTRL estiver pressionado junto, é sinal de
+      // que o usuário está tentando esse combo, não cancelar uma prévia. Nesse caso, deixa o
+      // ESC passar direto (sem cancelar nada aqui) até o ENTER decidir o que fazer.
       if(tecla == 27) // Tecla 'ESC'
       {
-         ApagarLinhasProjecao();
-         globalMensagemStatus = "(C ou SHIFT) Compra | (V ou CTRL) Venda";
+         bool ctrlJuntoComEsc = (TerminalInfoInteger(TERMINAL_KEYSTATE_CONTROL) < 0);
+         if(!ctrlJuntoComEsc)
+         {
+            ApagarLinhasProjecao();
+            globalMensagemStatus = "(C ou SHIFT) Compra | (V ou CTRL) Venda";
+         }
          return;
       }
 
