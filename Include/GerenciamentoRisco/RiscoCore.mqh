@@ -1634,7 +1634,7 @@ void CalcularMetricasDoDia()
 
 // Mesma lógica de CalcularResultadoFinanceiroDoDia(), mas filtrando por PREFIXO do símbolo
 // em vez do _Symbol exato do gráfico atual - usada para somar o resultado do dia de outros
-// ativos suportados (WDO/WIN/CCM) no "PnL diário TOTAL" do painel, sem depender de haver
+// ativos suportados (WDO/WIN/CCM) no "PnL diário GERAL" do painel, sem depender de haver
 // uma posição aberta selecionada naquele ativo (funciona só com o histórico de negócios).
 double CalcularResultadoFinanceiroDoDiaPorPrefixo(string prefixo)
 {
@@ -2152,7 +2152,7 @@ void AtualizarPainelVisualEmTempoReal()
    int qtdExtras = ColetarPosicoesExtraGrafico(posicoesExtra);
    int maxExtrasPossivel = ArraySize(ConfigsDisponiveis) - 1; // no máximo, todos os outros ativos configurados
 
-   // PnL diário TOTAL = PnL diário do gráfico atual + PnL diário (realizado) de cada outro
+   // PnL diário GERAL = PnL diário do gráfico atual + PnL diário (realizado) de cada outro
    // ativo suportado, buscado por PREFIXO no histórico - funciona mesmo sem posição aberta
    // naquele ativo no momento (basta ter havido negócio hoje).
    double pnlDiarioTotalTodos = pnlDiarioAtual;
@@ -2170,11 +2170,11 @@ void AtualizarPainelVisualEmTempoReal()
    // topo (EXTRA_SEP_A foi removido, ficava colado ao separador do índice 7).
    //
    // Layout deste bloco (sempre nesta ordem, de cima pra baixo quando o painel está no
-   // canto superior): PnL diário TOTAL (SEMPRE visível) -> posições extra-gráfico (só se
+   // canto superior): PnL diário GERAL (SEMPRE visível) -> posições extra-gráfico (só se
    // houver alguma aberta) -> instrução + botão "Zerar" na mesma linha (só se houver
    // posição extra-gráfico aberta) -> separador (sempre, fronteira com o bloco seguinte).
-   int linhaBaseExtras = 8; // linha do "PnL diário TOTAL", sempre presente
-   int linhasOcupadasPorExtras = 1 /*PnL diário TOTAL*/ + (qtdExtras > 0 ? (qtdExtras + 1 /*instrução*/) : 0) + 1 /*separador*/;
+   int linhaBaseExtras = 8; // linha do "PnL diário GERAL", sempre presente
+   int linhasOcupadasPorExtras = 1 /*PnL diário GERAL*/ + (qtdExtras > 0 ? (qtdExtras + 1 /*instrução*/) : 0) + 1 /*separador*/;
 
    ObjectDelete(0, PREFIX_TXT+"EXTRA_SEP_A"); // não existe mais - remove eventual resíduo de uma versão anterior
 
@@ -2200,7 +2200,7 @@ void AtualizarPainelVisualEmTempoReal()
       ObjectDelete(0, PREFIX_TXT+"EXTRA_INSTR");
       ObjectDelete(0, "Btn_ZerarTudo");
    }
-   // Separador de baixo do bloco - SEMPRE presente agora (o PnL diário TOTAL também é
+   // Separador de baixo do bloco - SEMPRE presente agora (o PnL diário GERAL também é
    // sempre mostrado, então o bloco nunca fica totalmente vazio).
    CriarSeparador(PREFIX_TXT+"EXTRA_SEP_B", MARGEM_DIREITA_TEXTO, GetLinhaY(linhaBaseExtras+linhasOcupadasPorExtras-1)+OffsetParaBaixo(7), LARGURA_SEPARADOR, clrSilver, cantoPainelAtual);
 
