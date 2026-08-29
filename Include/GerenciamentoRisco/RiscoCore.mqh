@@ -360,7 +360,7 @@ int OnInit()
       tpAlvoPosicaoAtual = PositionGetDouble(POSITION_TP);
    }
 
-   EventSetMillisecondTimer(50);
+   EventSetMillisecondTimer(1500);
 
    // Necessário para receber CHARTEVENT_MOUSE_MOVE - usado para a prévia (SHIFT/CTRL)
    // acompanhar o cursor do mouse pelo gráfico.
@@ -432,7 +432,7 @@ void OnTimer()
 }
 
 // Trava contra reentrância: ProcessarRotinasDeAtualizacao() é chamada tanto pelo OnTick()
-// (a cada novo preço) quanto pelo OnTimer() (a cada ~50ms) - e também, indiretamente, por
+// (a cada novo preço) quanto pelo OnTimer() (a cada ~2000ms) - e também, indiretamente, por
 // CHARTEVENT_CHART_CHANGE. Normalmente o MQL5 processa esses eventos em fila, um de cada
 // vez, mas ChartRedraw() dentro dessa função pode, em certas condições, disparar um novo
 // CHARTEVENT_CHART_CHANGE antes da chamada atual terminar - reentrando na mesma função
@@ -574,6 +574,13 @@ void OnChartEvent(const int id, const long& lparam, const double& dparam, const 
          }
          ChartRedraw(0);
       }
+
+      // Redesenha o painel na hora, pra qualquer botão clicado - sem isso, o clique muda o
+      // estado (fase/papéis/negócios/canto) na mesma hora, mas o texto na tela só refletia
+      // a mudança no próximo ciclo do OnTick()/OnTimer(), que pode estar bem espaçado agora
+      // (ex.: 2000ms). Só atualiza a APARÊNCIA do painel - nenhuma ordem é enviada nem
+      // nenhuma lógica de risco roda aqui além do que os handlers acima já fizeram.
+      AtualizarPainelVisualEmTempoReal();
    }
 
    if(id == CHARTEVENT_KEYDOWN)
@@ -645,6 +652,14 @@ void OnChartEvent(const int id, const long& lparam, const double& dparam, const 
    {
       ultimoMouseXPixel = (int)lparam;
       ultimoMouseYPixel = (int)dparam;
+
+      // Detecta SHIFT/CTRL pressionado/solto A CADA movimento do mouse, em vez de esperar
+      // o próximo ciclo do timer (que pode estar bem mais espaçado agora, ex.: 1500ms) -
+      // assim, armar e desarmar reagem à velocidade do mouse, não à do
+      // EventSetMillisecondTimer(). Ainda continua sendo chamada no ciclo periódico também
+      // (em ProcessarRotinasDeAtualizacao), como reforço pro caso raro de segurar a tecla
+      // sem mexer o mouse nem um pixel.
+      ProcessarModificadoresDeArme();
 
       if(armadoPorModificador && operacaoPendente)
       {
