@@ -431,8 +431,22 @@ void OnTimer()
    ProcessarRotinasDeAtualizacao();
 }
 
+// Trava contra reentrância: ProcessarRotinasDeAtualizacao() é chamada tanto pelo OnTick()
+// (a cada novo preço) quanto pelo OnTimer() (a cada ~50ms) - e também, indiretamente, por
+// CHARTEVENT_CHART_CHANGE. Normalmente o MQL5 processa esses eventos em fila, um de cada
+// vez, mas ChartRedraw() dentro dessa função pode, em certas condições, disparar um novo
+// CHARTEVENT_CHART_CHANGE antes da chamada atual terminar - reentrando na mesma função
+// enquanto ela ainda está no meio da execução, mexendo nas mesmas variáveis/objetos globais
+// ao mesmo tempo. Essa trava garante que só uma chamada esteja "dentro" por vez; qualquer
+// tentativa de entrar de novo enquanto já está rodando é simplesmente ignorada (o próximo
+// tick/timer tenta de novo, já com a chamada anterior terminada).
+bool processandoRotinasDeAtualizacao = false;
+
 void ProcessarRotinasDeAtualizacao()
 {
+   if(processandoRotinasDeAtualizacao) return;
+   processandoRotinasDeAtualizacao = true;
+
    VerificarTrocaDeDia();
    CalcularMetricasDoDia();
    ProcessarModificadoresDeArme();
@@ -447,6 +461,8 @@ void ProcessarRotinasDeAtualizacao()
    GarantirProtecaoDaPosicao();
    ProcessarFilaDeSons();
    ProcessarResetVisualDeBotoes();
+
+   processandoRotinasDeAtualizacao = false;
 }
 
 void VerificarTrocaDeDia()
