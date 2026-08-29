@@ -81,9 +81,17 @@ int totalLinhasPainelAtual = 12;
 // Reset visual "atrasado" dos botões: em vez de voltar ao estado normal no mesmo instante
 // do clique (rápido demais pra perceber), o botão clicado fica marcado como "pressionado"
 // por DURACAO_VISUAL_CLIQUE_MS antes de ser resetado - dando um flash visual perceptível.
+//
+// Como esse reset é conferido dentro do ciclo periódico (OnTimer), e o timer normal agora
+// pode estar bem espaçado (ex.: 1500-2000ms), o flash ficaria "preso" por muito mais tempo
+// que DURACAO_VISUAL_CLIQUE_MS. Pra desassociar isso do timer normal, o EA acelera o timer
+// temporariamente (INTERVALO_TIMER_RAPIDO_MS) assim que um botão é clicado, e volta pro
+// intervalo normal (INTERVALO_TIMER_NORMAL_MS) assim que o reset acontece de verdade.
 string botaoPendenteDeReset = "";
 uint   tickBotaoPendenteDeReset = 0;
 const uint DURACAO_VISUAL_CLIQUE_MS = 100;
+const uint INTERVALO_TIMER_NORMAL_MS = 2000; // deve bater com o valor passado em EventSetMillisecondTimer() no OnInit
+const uint INTERVALO_TIMER_RAPIDO_MS = 50;   // usado só enquanto há um botão aguardando o reset visual
 
 // Fila de sons de gain/loss: como o PlaySound() só tem um canal de áudio, tocar dois sons
 // muito próximos no tempo faz o segundo CORTAR o primeiro antes dele terminar (não fica
@@ -360,7 +368,7 @@ int OnInit()
       tpAlvoPosicaoAtual = PositionGetDouble(POSITION_TP);
    }
 
-   EventSetMillisecondTimer(1500);
+   EventSetMillisecondTimer(INTERVALO_TIMER_NORMAL_MS);
 
    // Necessário para receber CHARTEVENT_MOUSE_MOVE - usado para a prévia (SHIFT/CTRL)
    // acompanhar o cursor do mouse pelo gráfico.
@@ -432,7 +440,7 @@ void OnTimer()
 }
 
 // Trava contra reentrância: ProcessarRotinasDeAtualizacao() é chamada tanto pelo OnTick()
-// (a cada novo preço) quanto pelo OnTimer() (a cada ~2000ms) - e também, indiretamente, por
+// (a cada novo preço) quanto pelo OnTimer() (a cada ~50ms) - e também, indiretamente, por
 // CHARTEVENT_CHART_CHANGE. Normalmente o MQL5 processa esses eventos em fila, um de cada
 // vez, mas ChartRedraw() dentro dessa função pode, em certas condições, disparar um novo
 // CHARTEVENT_CHART_CHANGE antes da chamada atual terminar - reentrando na mesma função
@@ -500,6 +508,7 @@ void OnChartEvent(const int id, const long& lparam, const double& dparam, const 
       {
          botaoPendenteDeReset = sparam;
          tickBotaoPendenteDeReset = GetTickCount();
+         EventSetMillisecondTimer(INTERVALO_TIMER_RAPIDO_MS); // acelera até o flash terminar
       }
 
       if(sparam == "Btn_FaseMenos")
@@ -567,6 +576,7 @@ void OnChartEvent(const int id, const long& lparam, const double& dparam, const 
          {
             botaoPendenteDeReset = "Btn_ZerarTudo";
             tickBotaoPendenteDeReset = GetTickCount();
+            EventSetMillisecondTimer(INTERVALO_TIMER_RAPIDO_MS); // acelera até o flash terminar
          }
          else
          {
@@ -1340,6 +1350,7 @@ void ProcessarResetVisualDeBotoes()
    ObjectSetInteger(0, botaoPendenteDeReset, OBJPROP_STATE, false);
    botaoPendenteDeReset = "";
    ChartRedraw(0);
+   EventSetMillisecondTimer(INTERVALO_TIMER_NORMAL_MS); // não há mais flash pendente - volta ao intervalo normal
 }
 
 void ProcessarFilaDeSons()
