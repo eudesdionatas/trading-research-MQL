@@ -488,8 +488,13 @@ void ProcessarRotinasDeAtualizacao()
    // "nada a proteger" - o que derrubava o timer rápido que o clique de um botão tinha acabado
    // de pedir, ANTES do flash visual (~100ms) ter chance de completar. Combinando os dois
    // motivos aqui, nenhum interfere mais no outro.
+   //
+   // "armadoPorModificador" também mantém o timer acelerado: soltar CTRL/SHIFT só é
+   // detectado de novo em ProcessarModificadoresDeArme(), chamada tanto no mouse move quanto
+   // aqui no ciclo periódico - sem o mouse se mexer depois de soltar a tecla, a prévia
+   // (linhas de entrada/SL/TP) ficava desenhada até o próximo ciclo "lento" rodar.
    bool precisaBotaoRapido = (botaoPendenteDeReset != "");
-   EventSetMillisecondTimer((precisaProtecaoRapida || precisaBotaoRapido) ? INTERVALO_TIMER_RAPIDO_MS : INTERVALO_TIMER_NORMAL_MS);
+   EventSetMillisecondTimer((precisaProtecaoRapida || precisaBotaoRapido || armadoPorModificador) ? INTERVALO_TIMER_RAPIDO_MS : INTERVALO_TIMER_NORMAL_MS);
 
    processandoRotinasDeAtualizacao = false;
 }
@@ -915,6 +920,7 @@ void ProcessarModificadoresDeArme()
          armadoPorModificador = true;
          modificadorTipoOperacao = 1;
          globalMensagemStatus = "Modo compra ativo (SHIFT)! Clique para enviar";
+         EventSetMillisecondTimer(INTERVALO_TIMER_RAPIDO_MS); // acelera na hora - não espera o próximo ciclo lento
       }
       else if(ctrlAgora)
       {
@@ -923,6 +929,7 @@ void ProcessarModificadoresDeArme()
          armadoPorModificador = true;
          modificadorTipoOperacao = 2;
          globalMensagemStatus = "Modo venda ativo (CTRL)! Clique para enviar";
+         EventSetMillisecondTimer(INTERVALO_TIMER_RAPIDO_MS); // acelera na hora - não espera o próximo ciclo lento
       }
    }
    else if(!shiftAgora && !ctrlAgora)
@@ -1096,12 +1103,24 @@ double ObterPontosAlvosEfetivos(double &slOut, double &tpOut, bool &ehOperacaoBo
 //| função abaixo ramifica UMA vez, no ponto exato da divergência.    |
 //+------------------------------------------------------------------+
 
+// Quantos "lotes" usar nas fórmulas de risco: sempre derivado de "Papéis por operação"
+// dividido pelo volume mínimo negociável do símbolo - pra WDO/WIN/CCM (1 contrato = 1
+// "lote"), isso equivale ao próprio número de papéis escolhido; pra Ações/ETF/FII, ao
+// número de lotes reais (papéis ÷ SYMBOL_VOLUME_MIN). Assim, Máx loss/Máx gain sempre
+// escalam de verdade com "Papéis por operação" - inclusive pra WDO e CCM, que antes
+// ficavam presos ao "Lote Max" fixo da fase, ignorando o que o usuário escolhesse.
+int ObterLotesParaFormula(int fase, int papeis)
+{
+   double volumeMin = ObterVolumeMinimoNegociavel(); // 1,0 pra WDO/WIN/CCM; volume mínimo real pra Ações/ETF/FII
+   return (int)MathRound(papeis / volumeMin);
+}
+
 // Acúmulo progressivo
 double CalcularAcumProg(int fase, int negociosDia, int papeis)
 {
    if(cfgAtiva.modoFormulaRisco == FORMULA_LOTE_MAX_FASE)
       // multiplicador financeiro por ponto vem da config do ativo (10,0 p/ WDO, 4,5 p/ CCM, ...)
-      return negociosDia * cfgAtiva.tabelaFases[fase].loteMax * cfgAtiva.tabelaFases[fase].gainPontos * ObterValorPorPontoPorLote();
+      return negociosDia * ObterLotesParaFormula(fase, papeis) * cfgAtiva.tabelaFases[fase].gainPontos * ObterValorPorPontoPorLote();
    else // FORMULA_PAPEIS_USUARIO
       return negociosDia * papeis * 10.0 * (cfgAtiva.tabelaFases[fase].gainPontos / 50.0);
 }
@@ -1110,7 +1129,7 @@ double CalcularAcumProg(int fase, int negociosDia, int papeis)
 double CalcularAcumReg(int fase, int negociosDia, int papeis)
 {
    if(cfgAtiva.modoFormulaRisco == FORMULA_LOTE_MAX_FASE)
-      return negociosDia * cfgAtiva.tabelaFases[fase].loteMax * cfgAtiva.tabelaFases[fase].lossPontos * ObterValorPorPontoPorLote();
+      return negociosDia * ObterLotesParaFormula(fase, papeis) * cfgAtiva.tabelaFases[fase].lossPontos * ObterValorPorPontoPorLote();
    else // FORMULA_PAPEIS_USUARIO
       return negociosDia * papeis * 10.0 * (cfgAtiva.tabelaFases[fase].lossPontos / 50.0);
 }
@@ -1120,7 +1139,7 @@ double CalcularLFT(int fase, int negociosDia, int papeis)
 {
    int floorOrdens2 = (int)MathFloor(negociosDia / 2.0);
    if(cfgAtiva.modoFormulaRisco == FORMULA_LOTE_MAX_FASE)
-      return floorOrdens2 * cfgAtiva.tabelaFases[fase].loteMax * ObterValorPorPontoPorLote() * (cfgAtiva.tabelaFases[fase].lossPontos * -1.0);
+      return floorOrdens2 * ObterLotesParaFormula(fase, papeis) * ObterValorPorPontoPorLote() * (cfgAtiva.tabelaFases[fase].lossPontos * -1.0);
    else // FORMULA_PAPEIS_USUARIO
       return floorOrdens2 * papeis * 20.0 * ((cfgAtiva.tabelaFases[fase].lossPontos * -1.0) / 2.0 / 50.0);
 }
@@ -2292,7 +2311,7 @@ void AtualizarPainelVisualEmTempoReal()
    CriarTextoLabel(PREFIX_TXT+"2",  textoFase,       MARGEM_DIREITA_TEXTO, GetLinhaY(2), 10, clrDodgerBlue, cantoPainelAtual);
    CriarTextoLabel(PREFIX_TXT+"3",  textoPapeis,     MARGEM_DIREITA_TEXTO, GetLinhaY(3), 10, clrDodgerBlue, cantoPainelAtual);
    CriarTextoLabel(PREFIX_TXT+"4",  textoLFT,        MARGEM_DIREITA_TEXTO, GetLinhaY(4), 10, corLFT, cantoPainelAtual);
-   CriarTextoLabel(PREFIX_TXT+"5",  textoAcumulos,   MARGEM_DIREITA_TEXTO, GetLinhaY(5), 10, clrSteelBlue, cantoPainelAtual);
+   CriarTextoLabel(PREFIX_TXT+"5",  textoAcumulos,   MARGEM_DIREITA_TEXTO, GetLinhaY(5), 10, CorContrasteComFundo(), cantoPainelAtual);
    CriarTextoLabel(PREFIX_TXT+"6",  textoNegocios,   MARGEM_DIREITA_TEXTO, GetLinhaY(6), 10, clrSteelBlue, cantoPainelAtual);
    CriarSeparador(PREFIX_TXT+"7",   MARGEM_DIREITA_TEXTO, GetLinhaY(7)+OffsetParaBaixo(7), LARGURA_SEPARADOR, clrSilver, cantoPainelAtual);
    // ---- Posições de outros ativos suportados (WDO/WIN/CCM, o que não for o do gráfico
