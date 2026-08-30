@@ -79,6 +79,12 @@ ENUM_BASE_CORNER cantoPainelAtual = CORNER_RIGHT_UPPER;
 // o painel mesmo quando ele cresce/encolhe dinamicamente.
 int totalLinhasPainelAtual = 12;
 
+// Maior quantidade de posições extra-gráfico já mostrada nesta sessão - usada como teto pra
+// limpeza dos objetos "EXTRA_POS" (ver ColetarPosicoesExtraGrafico). Substitui o antigo teto
+// fixo "ArraySize(ConfigsDisponiveis)-1", que deixou de fazer sentido com "Ações/ETF/FII"
+// podendo casar com várias posições reais ao mesmo tempo (sem número máximo conhecido).
+int maiorQtdExtrasJaMostrada = 0;
+
 // Atalho CTRL+ESC+ENTER ("zera TODAS as posições suportadas") e botão "Zerar" (mesma ação
 // via mouse, com ESC+Clique) - ESC tem TERMINAL_KEYSTATE_ESCAPE nativo no MQL5, então dá
 // pra checar "está pressionada agora?" direto, sem precisar do truque de GetTickCount()
@@ -96,7 +102,7 @@ int totalLinhasPainelAtual = 12;
 string botaoPendenteDeReset = "";
 uint   tickBotaoPendenteDeReset = 0;
 const uint DURACAO_VISUAL_CLIQUE_MS = 100;
-const uint INTERVALO_TIMER_NORMAL_MS = 1500; // deve bater com o valor passado em EventSetMillisecondTimer() no OnInit
+const uint INTERVALO_TIMER_NORMAL_MS = 2500; // deve bater com o valor passado em EventSetMillisecondTimer() no OnInit
 const uint INTERVALO_TIMER_RAPIDO_MS = 50;   // usado só enquanto há um botão aguardando o reset visual
 
 // Fila de sons de gain/loss: como o PlaySound() só tem um canal de áudio, tocar dois sons
@@ -352,7 +358,7 @@ int OnInit()
 
    baseNegociosDia = MathMax(NEGOCIOS_DIA_MINIMO, InpNegociosDiaInicial);
    if(baseNegociosDia % 2 == 0) baseNegociosDia++; // garante número ímpar
-   papeisPorOperacao = cfgAtiva.tabelaFases[faseAtual].loteMax;
+   papeisPorOperacao = ObterLoteMaxFinal(faseAtual);
    bonusConcedidoHoje = false;
    ultimoDiaVerificado = 0;
 
@@ -388,7 +394,7 @@ int OnInit()
    ObjectDelete(0, PREFIX_TXT+"EXTRA_INSTR");
    ObjectDelete(0, PREFIX_TXT+"EXTRA_SEP_B");
    ObjectDelete(0, PREFIX_TXT+"SEP_STATUS");
-   for(int i=0; i<ArraySize(ConfigsDisponiveis)-1; i++) ObjectDelete(0, PREFIX_TXT+"EXTRA_POS"+IntegerToString(i));
+   for(int i=0; i<20; i++) ObjectDelete(0, PREFIX_TXT+"EXTRA_POS"+IntegerToString(i)); // limite generoso - "Ações/ETF/FII" não tem teto fixo de posições simultâneas
    ObjectDelete(0, "Btn_FaseMenos");
    ObjectDelete(0, "Btn_FaseMais");
    ObjectDelete(0, "Btn_PapelMenos");
@@ -422,7 +428,7 @@ void OnDeinit(const int reason)
    ObjectDelete(0, PREFIX_TXT+"EXTRA_INSTR");
    ObjectDelete(0, PREFIX_TXT+"EXTRA_SEP_B");
    ObjectDelete(0, PREFIX_TXT+"SEP_STATUS");
-   for(int i=0; i<ArraySize(ConfigsDisponiveis)-1; i++) ObjectDelete(0, PREFIX_TXT+"EXTRA_POS"+IntegerToString(i));
+   for(int i=0; i<20; i++) ObjectDelete(0, PREFIX_TXT+"EXTRA_POS"+IntegerToString(i)); // limite generoso - "Ações/ETF/FII" não tem teto fixo de posições simultâneas
    ObjectDelete(0, "Btn_FaseMenos");
    ObjectDelete(0, "Btn_FaseMais");
    ObjectDelete(0, "Btn_PapelMenos");
@@ -472,9 +478,18 @@ void ProcessarRotinasDeAtualizacao()
 
    AtualizarPainelVisualEmTempoReal();
    ProcessarSomDeSaidaPendente();
-   GarantirProtecaoDaPosicao();
+   bool precisaProtecaoRapida = GarantirProtecaoDaPosicao();
    ProcessarFilaDeSons();
    ProcessarResetVisualDeBotoes();
+
+   // Decisão do intervalo do timer centralizada AQUI, uma única vez por ciclo - antes,
+   // GarantirProtecaoDaPosicao() e ProcessarResetVisualDeBotoes() mexiam no timer cada um
+   // por conta própria, e um chamava EventSetMillisecondTimer(NORMAL) toda vez que concluía
+   // "nada a proteger" - o que derrubava o timer rápido que o clique de um botão tinha acabado
+   // de pedir, ANTES do flash visual (~100ms) ter chance de completar. Combinando os dois
+   // motivos aqui, nenhum interfere mais no outro.
+   bool precisaBotaoRapido = (botaoPendenteDeReset != "");
+   EventSetMillisecondTimer((precisaProtecaoRapida || precisaBotaoRapido) ? INTERVALO_TIMER_RAPIDO_MS : INTERVALO_TIMER_NORMAL_MS);
 
    processandoRotinasDeAtualizacao = false;
 }
@@ -520,26 +535,26 @@ void OnChartEvent(const int id, const long& lparam, const double& dparam, const 
       if(sparam == "Btn_FaseMenos")
       {
          if(faseAtual > 1) faseAtual--;
-         papeisPorOperacao = cfgAtiva.tabelaFases[faseAtual].loteMax;
+         papeisPorOperacao = ObterLoteMaxFinal(faseAtual);
          SalvarEstadoPersistente();
          ChartRedraw(0);
       }
       else if(sparam == "Btn_FaseMais")
       {
          if(faseAtual < 10) faseAtual++;
-         papeisPorOperacao = cfgAtiva.tabelaFases[faseAtual].loteMax;
+         papeisPorOperacao = ObterLoteMaxFinal(faseAtual);
          SalvarEstadoPersistente();
          ChartRedraw(0);
       }
       else if(sparam == "Btn_PapelMenos")
       {
-         papeisPorOperacao = (int)MathMax(1, papeisPorOperacao - 1);
+         papeisPorOperacao = (int)MathMax(ObterVolumeMinimoNegociavel(), papeisPorOperacao - ObterIncrementoPapeis());
          SalvarEstadoPersistente();
          ChartRedraw(0);
       }
       else if(sparam == "Btn_PapelMais")
       {
-         papeisPorOperacao = (int)MathMin(cfgAtiva.tabelaFases[faseAtual].loteMax, papeisPorOperacao + 1);
+         papeisPorOperacao = (int)MathMin(ObterLoteMaxFinal(faseAtual), papeisPorOperacao + ObterIncrementoPapeis());
          SalvarEstadoPersistente();
          ChartRedraw(0);
       }
@@ -823,7 +838,11 @@ bool BloqueadoPorLimiteDiario()
    double limiteLossEfetivo = todosGanhosHoje ? (pnlDiarioAtual - lftAtual) : acumRegAtual;
 
    bool limiteOrdensAtingido = (operacoesFeitasHoje >= maxOrdensPermitidas);
-   bool limiteLossAtingido    = (pnlDiarioAtual <= limiteLossEfetivo);
+   // O limite de perda só dispara quando o piso calculado é genuinamente NEGATIVO. Em fases
+   // com LOSS positivo (trava de lucro numa fase avançada - ex.: Ações/ETF/FII fase 5),
+   // acumRegAtual vira positivo, e "PnL <= piso positivo" ficava satisfeito trivialmente com
+   // PnL ainda em R$0,00 - disparando "Basta por hoje!" antes de qualquer negócio.
+   bool limiteLossAtingido    = (limiteLossEfetivo < 0.0) && (pnlDiarioAtual <= limiteLossEfetivo);
    bool limiteGainAtingido    = (pnlDiarioAtual >= acumProgAtual);
 
    if(limiteOrdensAtingido || limiteLossAtingido || limiteGainAtingido)
@@ -914,6 +933,68 @@ void ProcessarModificadoresDeArme()
    }
 }
 
+//+------------------------------------------------------------------+
+//| Valores DINÂMICOS por ativo - lidos do próprio símbolo em tempo   |
+//| real, só quando cfgAtiva pede isso (hoje, só a config genérica    |
+//| "Ações/ETF/FII"). WDO/WIN/CCM continuam usando os números fixos   |
+//| da tabela, exatamente como antes - nada muda pra eles.            |
+//+------------------------------------------------------------------+
+
+// R$ por ponto por lote: fixo na tabela (WDO/WIN/CCM), ou lido de
+// SYMBOL_TRADE_TICK_VALUE do símbolo (Ações/ETF/FII) - não precisa cadastrar isso
+// manualmente por papel, e já vem certo tanto pro lote padrão quanto pro fracionário.
+double ObterValorPorPontoPorLote()
+{
+   if(!cfgAtiva.valorPorPontoDinamico) return cfgAtiva.valorPorPontoPorLote;
+
+   double valorTick = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
+   if(valorTick <= 0.0) return cfgAtiva.valorPorPontoPorLote; // fallback de segurança
+
+   // Em ações/ETF/FII, SYMBOL_TRADE_TICK_VALUE normalmente é por UNIDADE/COTA individual
+   // (volume=1.0 no MT5 = 1 ação), não por "lote". Como a tabela de fases (loteMax) é
+   // expressa em LOTES (1 lote = SYMBOL_VOLUME_MIN unidades), o valor por ponto precisa ser
+   // multiplicado pelo mesmo fator - senão Máx Loss/Gain saem subestimados exatamente pelo
+   // tamanho do lote mínimo (ex.: 100x menor no lote padrão de uma ação comum).
+   if(cfgAtiva.loteBaseadoEmVolumeMinimo)
+      valorTick *= ObterVolumeMinimoNegociavel();
+
+   return valorTick;
+}
+
+// Quantidade MÍNIMA negociável do símbolo (1 pra WDO/WIN/CCM; SYMBOL_VOLUME_MIN pra
+// Ações/ETF/FII - 100 no lote padrão, 1 no fracionário "F").
+double ObterVolumeMinimoNegociavel()
+{
+   if(!cfgAtiva.loteBaseadoEmVolumeMinimo) return 1.0;
+
+   double volumeMin = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+   return (volumeMin > 0.0) ? volumeMin : 1.0; // fallback de segurança
+}
+
+// Lote Max FINAL da fase: o valor abstrato da tabela (1-10) direto pra WDO/WIN/CCM, ou
+// esse mesmo valor multiplicado pelo mínimo negociável do símbolo pra Ações/ETF/FII (ex.:
+// fase 4 = 4 na tabela, 4 x 100 = 400 ações numa VALE3 de lote padrão). As FÓRMULAS de
+// risco (CalcularAcumProg/Reg/LFT) usam sempre o valor ABSTRATO da tabela, nunca este -
+// essa função é só pra definir a quantidade REAL a comprar/vender.
+int ObterLoteMaxFinal(int fase)
+{
+   int loteTabela = cfgAtiva.tabelaFases[fase].loteMax;
+   if(!cfgAtiva.loteBaseadoEmVolumeMinimo) return loteTabela;
+
+   return (int)MathRound(loteTabela * ObterVolumeMinimoNegociavel());
+}
+
+// Incremento do botão "Papéis por operação -/+": 1 unidade pra ativos com lote em
+// contratos (WDO/WIN/CCM), ou o passo mínimo negociável do símbolo (SYMBOL_VOLUME_STEP)
+// pra Ações/ETF/FII - incrementar de 1 em 1 num lote padrão geraria quantidade inválida.
+int ObterIncrementoPapeis()
+{
+   if(!cfgAtiva.loteBaseadoEmVolumeMinimo) return 1;
+
+   double step = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   return (step > 0.0) ? (int)MathRound(step) : 1;
+}
+
 // Converte "pontos" (como usados nas tabelas de fase) para a mesma unidade do preço
 // do símbolo. Alguns ativos (ex.: WDO) já têm _Point na mesma escala usada pela tabela
 // de fases (conversão direta); outros (ex.: WIN) precisam multiplicar por _Point. Ver
@@ -989,7 +1070,7 @@ double ObterPontosAlvosEfetivos(double &slOut, double &tpOut, bool &ehOperacaoBo
    if(ehOperacaoBonus && papeisPorOperacao > 0)
    {
       double lftAtual = CalcularLFT(faseAtual, E, papeisPorOperacao);
-      double pontosMaxPermitidoPeloLFT = MathFloor(lftAtual / (papeisPorOperacao * cfgAtiva.valorPorPontoPorLote));
+      double pontosMaxPermitidoPeloLFT = MathFloor(lftAtual / (papeisPorOperacao * ObterValorPorPontoPorLote()));
 
       if(pontosMaxPermitidoPeloLFT > 0 && pontosMaxPermitidoPeloLFT < slOut)
          slOut = ArredondarParaPassoDoPreco(pontosMaxPermitidoPeloLFT);
@@ -1020,7 +1101,7 @@ double CalcularAcumProg(int fase, int negociosDia, int papeis)
 {
    if(cfgAtiva.modoFormulaRisco == FORMULA_LOTE_MAX_FASE)
       // multiplicador financeiro por ponto vem da config do ativo (10,0 p/ WDO, 4,5 p/ CCM, ...)
-      return negociosDia * cfgAtiva.tabelaFases[fase].loteMax * cfgAtiva.tabelaFases[fase].gainPontos * cfgAtiva.valorPorPontoPorLote;
+      return negociosDia * cfgAtiva.tabelaFases[fase].loteMax * cfgAtiva.tabelaFases[fase].gainPontos * ObterValorPorPontoPorLote();
    else // FORMULA_PAPEIS_USUARIO
       return negociosDia * papeis * 10.0 * (cfgAtiva.tabelaFases[fase].gainPontos / 50.0);
 }
@@ -1029,7 +1110,7 @@ double CalcularAcumProg(int fase, int negociosDia, int papeis)
 double CalcularAcumReg(int fase, int negociosDia, int papeis)
 {
    if(cfgAtiva.modoFormulaRisco == FORMULA_LOTE_MAX_FASE)
-      return negociosDia * cfgAtiva.tabelaFases[fase].loteMax * cfgAtiva.tabelaFases[fase].lossPontos * cfgAtiva.valorPorPontoPorLote;
+      return negociosDia * cfgAtiva.tabelaFases[fase].loteMax * cfgAtiva.tabelaFases[fase].lossPontos * ObterValorPorPontoPorLote();
    else // FORMULA_PAPEIS_USUARIO
       return negociosDia * papeis * 10.0 * (cfgAtiva.tabelaFases[fase].lossPontos / 50.0);
 }
@@ -1039,7 +1120,7 @@ double CalcularLFT(int fase, int negociosDia, int papeis)
 {
    int floorOrdens2 = (int)MathFloor(negociosDia / 2.0);
    if(cfgAtiva.modoFormulaRisco == FORMULA_LOTE_MAX_FASE)
-      return floorOrdens2 * cfgAtiva.tabelaFases[fase].loteMax * cfgAtiva.valorPorPontoPorLote * (cfgAtiva.tabelaFases[fase].lossPontos * -1.0);
+      return floorOrdens2 * cfgAtiva.tabelaFases[fase].loteMax * ObterValorPorPontoPorLote() * (cfgAtiva.tabelaFases[fase].lossPontos * -1.0);
    else // FORMULA_PAPEIS_USUARIO
       return floorOrdens2 * papeis * 20.0 * ((cfgAtiva.tabelaFases[fase].lossPontos * -1.0) / 2.0 / 50.0);
 }
@@ -1165,8 +1246,10 @@ void EnviarOrdemMercado()
    bool   todosGanhosHoje = CondicaoAtivacaoLFT(pnlDiarioAtual, acumProgAtual);
    double limiteLossEfetivo = todosGanhosHoje ? (pnlDiarioAtual - lftAtual) : acumRegAtual;
 
+   // Mesma guarda de BloqueadoPorLimiteDiario(): só considera "limite de perda" quando o
+   // piso for genuinamente negativo (ver comentário lá pra mais detalhes).
    if(operacoesFeitasHoje >= maxOrdensPermitidas ||
-      pnlDiarioAtual <= limiteLossEfetivo ||
+      (limiteLossEfetivo < 0.0 && pnlDiarioAtual <= limiteLossEfetivo) ||
       pnlDiarioAtual >= acumProgAtual)
    {
       globalMensagemStatus = "Basta por hoje! (Limites diários atingidos)";
@@ -1356,7 +1439,9 @@ void ProcessarResetVisualDeBotoes()
    ObjectSetInteger(0, botaoPendenteDeReset, OBJPROP_STATE, false);
    botaoPendenteDeReset = "";
    ChartRedraw(0);
-   EventSetMillisecondTimer(INTERVALO_TIMER_NORMAL_MS); // não há mais flash pendente - volta ao intervalo normal
+   // O timer NÃO é restaurado aqui diretamente - ver comentário em
+   // ProcessarRotinasDeAtualizacao() sobre por que essa decisão foi centralizada num único
+   // lugar (evita o watchdog e o flash do botão brigarem pelo mesmo timer).
 }
 
 void ProcessarFilaDeSons()
@@ -1446,16 +1531,15 @@ void ProcessarSomDeSaidaPendente()
 // ainda está de fato aplicado na posição. Se sumir por qualquer motivo (falha silenciosa
 // anterior, ação externa, etc.), tenta reaplicar automaticamente e alerta o usuário -
 // evita o cenário relatado de uma posição ficar sem proteção nenhuma sem ninguém perceber.
-void GarantirProtecaoDaPosicao()
+// Retorna true quando o ciclo seguinte precisa rodar com o timer ACELERADO (posição
+// genuinamente sem SL/TP) - a decisão de qual intervalo usar de fato é tomada só uma vez,
+// no fim de ProcessarRotinasDeAtualizacao(), pra não brigar com o flash visual dos botões
+// (que também pede timer acelerado, e tinha esse pedido sendo derrubado por esta função
+// toda vez que ela concluía "nada a proteger, volta pro normal").
+bool GarantirProtecaoDaPosicao()
 {
    if(slAlvoPosicaoAtual == 0.0 && tpAlvoPosicaoAtual == 0.0)
-   {
-      // Nada a proteger - garante que o timer não fique "preso" acelerado, caso a posição
-      // tenha sido fechada por outro caminho (ex.: FecharPosicaoAberta/CTRL+Enter) enquanto
-      // o watchdog estava com o timer rápido ativo.
-      EventSetMillisecondTimer(INTERVALO_TIMER_NORMAL_MS);
-      return;
-   }
+      return false; // nada a proteger
 
    if(!PositionSelect(_Symbol))
    {
@@ -1463,8 +1547,7 @@ void GarantirProtecaoDaPosicao()
       slAlvoPosicaoAtual = 0.0;
       tpAlvoPosicaoAtual = 0.0;
       tentativasSomProtecaoFalha = 0;
-      EventSetMillisecondTimer(INTERVALO_TIMER_NORMAL_MS); // nada mais a proteger - timer volta ao normal
-      return;
+      return false;
    }
 
    double slAtual = PositionGetDouble(POSITION_SL);
@@ -1476,15 +1559,12 @@ void GarantirProtecaoDaPosicao()
    if(!faltaSL && !faltaTP)
    {
       tentativasSomProtecaoFalha = 0;
-      EventSetMillisecondTimer(INTERVALO_TIMER_NORMAL_MS); // protegida - timer volta ao normal
-      return;
+      return false; // protegida, nada a fazer
    }
 
-   // Posição SEM SL/TP: acelera o timer pra reagir rápido, independente de qual intervalo
-   // normal estiver configurado - mesma técnica já usada no flash visual dos botões.
-   EventSetMillisecondTimer(INTERVALO_TIMER_RAPIDO_MS);
-
-   if(GetTickCount() - ultimaTentativaProtecaoMs < INTERVALO_TENTATIVA_PROTECAO_MS) return; // evita martelar a corretora
+   // Posição SEM SL/TP: o chamador vai acelerar o timer pra reagir rápido, independente de
+   // qual intervalo normal estiver configurado - mesma técnica já usada no flash dos botões.
+   if(GetTickCount() - ultimaTentativaProtecaoMs < INTERVALO_TENTATIVA_PROTECAO_MS) return true; // evita martelar a corretora
    ultimaTentativaProtecaoMs = GetTickCount();
 
    globalMensagemStatus = "ALERTA: Posição SEM SL/TP! Corrigindo automaticamente...";
@@ -1507,6 +1587,8 @@ void GarantirProtecaoDaPosicao()
          if(!PlaySound("errorPlacingOrder.wav")) PlaySound("\\Audio\\errorPlacingOrder.wav");
       }
    }
+
+   return true;
 }
 
 //+------------------------------------------------------------------+
@@ -1524,7 +1606,7 @@ bool ExisteQualquerPosicaoAbertaSuportada()
       if(ticket == 0) continue;
       string simb = PositionGetString(POSITION_SYMBOL);
       for(int c = 0; c < ArraySize(ConfigsDisponiveis); c++)
-         if(StringFind(simb, ConfigsDisponiveis[c].prefixoSimbolo) == 0)
+         if(SimboloBateComConfig(simb, ConfigsDisponiveis[c]))
             return true;
    }
    return false;
@@ -1548,7 +1630,7 @@ void FecharTodasAsPosicoesSuportadas()
 
       bool suportado = false;
       for(int c = 0; c < ArraySize(ConfigsDisponiveis); c++)
-         if(StringFind(simb, ConfigsDisponiveis[c].prefixoSimbolo) == 0) { suportado = true; break; }
+         if(SimboloBateComConfig(simb, ConfigsDisponiveis[c])) { suportado = true; break; }
       if(!suportado) continue;
 
       double lucroFlutuante = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
@@ -1574,42 +1656,43 @@ struct InfoPosicaoExtra
    color  cor;
 };
 
-// Varre a conta procurando, para cada ativo suportado DIFERENTE do gráfico atual, uma
-// posição aberta - se achar, monta a linha de texto (com PnL) pro painel. No máximo uma
-// posição por ativo é considerada (é o comportamento normal de conta netting).
+// Varre TODAS as posições abertas na conta (uma vez só) e monta uma linha pro painel pra
+// CADA uma que pertença a algum ativo suportado e não seja a do gráfico atual. Ao contrário
+// de "uma por config", isso cobre corretamente a config genérica "Ações/ETF/FII" - que pode
+// casar com VÁRIAS posições reais ao mesmo tempo (ex.: PETR4 e VALE3 abertas juntas) - sem
+// depender de nenhum teto fixo de quantas posições extras podem existir simultaneamente.
 int ColetarPosicoesExtraGrafico(InfoPosicaoExtra &out[])
 {
    ArrayResize(out, 0);
 
-   for(int c = 0; c < ArraySize(ConfigsDisponiveis); c++)
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
-      if(StringFind(_Symbol, ConfigsDisponiveis[c].prefixoSimbolo) == 0) continue; // é o ativo do gráfico atual - já exibido acima
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
 
-      for(int i = PositionsTotal() - 1; i >= 0; i--)
-      {
-         ulong ticket = PositionGetTicket(i);
-         if(ticket == 0) continue;
+      string simb = PositionGetString(POSITION_SYMBOL);
+      if(simb == _Symbol) continue; // é a posição do gráfico atual - já exibida acima
 
-         string simb = PositionGetString(POSITION_SYMBOL);
-         if(StringFind(simb, ConfigsDisponiveis[c].prefixoSimbolo) != 0) continue;
+      bool suportado = false;
+      for(int c = 0; c < ArraySize(ConfigsDisponiveis); c++)
+         if(SimboloBateComConfig(simb, ConfigsDisponiveis[c])) { suportado = true; break; }
+      if(!suportado) continue;
 
-         long   tipoPos     = PositionGetInteger(POSITION_TYPE);
-         double vol         = PositionGetDouble(POSITION_VOLUME);
-         double lucro       = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
-         int    volSinal    = (tipoPos == POSITION_TYPE_BUY) ? (int)vol : -(int)vol;
+      long   tipoPos     = PositionGetInteger(POSITION_TYPE);
+      double vol         = PositionGetDouble(POSITION_VOLUME);
+      double lucro       = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+      int    volSinal    = (tipoPos == POSITION_TYPE_BUY) ? (int)vol : -(int)vol;
 
-         string valorFmt = DoubleToString(lucro, 2); StringReplace(valorFmt, ".", ",");
+      string valorFmt = DoubleToString(lucro, 2); StringReplace(valorFmt, ".", ",");
 
-         InfoPosicaoExtra info;
-         info.texto = StringFormat("Posição %s (%d %s) | PnL R$ %s",
-                         (tipoPos == POSITION_TYPE_BUY ? "comprada" : "vendida"), volSinal, simb, valorFmt);
-         info.cor = (lucro > 0.0) ? clrLightGreen : (lucro < 0.0 ? clrLightSalmon : clrGainsboro );
+      InfoPosicaoExtra info;
+      info.texto = StringFormat("Posição %s (%d %s) | PnL R$ %s",
+                      (tipoPos == POSITION_TYPE_BUY ? "comprada" : "vendida"), volSinal, simb, valorFmt);
+      info.cor = (lucro > 0.0) ? clrLightGreen : (lucro < 0.0 ? clrLightSalmon : clrGainsboro );
 
-         int n = ArraySize(out);
-         ArrayResize(out, n + 1);
-         out[n] = info;
-         break; // já achou a posição desse ativo - vai para o próximo ativo configurado
-      }
+      int n = ArraySize(out);
+      ArrayResize(out, n + 1);
+      out[n] = info;
    }
 
    return ArraySize(out);
@@ -1691,11 +1774,20 @@ void CalcularMetricasDoDia()
    }
 }
 
-// Mesma lógica de CalcularResultadoFinanceiroDoDia(), mas filtrando por PREFIXO do símbolo
-// em vez do _Symbol exato do gráfico atual - usada para somar o resultado do dia de outros
-// ativos suportados (WDO/WIN/CCM) no "PnL diário GERAL" do painel, sem depender de haver
-// uma posição aberta selecionada naquele ativo (funciona só com o histórico de negócios).
-double CalcularResultadoFinanceiroDoDiaPorPrefixo(string prefixo)
+// Mesma lógica de CalcularResultadoFinanceiroDoDia(), mas filtrando pela CONFIG do ativo
+// (via SimboloBateComConfig, não um prefixo cru) em vez do _Symbol exato do gráfico atual -
+// usada para somar o resultado do dia de outros ativos suportados no "PnL diário GERAL" do
+// painel, sem depender de haver posição aberta selecionada naquele ativo. IMPORTANTE: usar
+// SimboloBateComConfig (não StringFind direto num prefixo) é o que permite isso funcionar
+// corretamente pra "Ações/ETF/FII" também - essa config tem prefixoSimbolo vazio (detecção
+// é por padrão de sufixo, não prefixo), então comparar por prefixo cru bateria com QUALQUER
+// negócio da conta.
+// "simboloExcluir" tira um símbolo específico da soma (o do gráfico atual, já contado à
+// parte via pnlDiarioAtual) - necessário porque, pra "Ações/ETF/FII", uma config pode casar
+// com VÁRIOS tickers diferentes ao mesmo tempo (ex.: PETR4 e VALE3); simplesmente "pular a
+// config inteira quando ela bate com o gráfico atual" (como antes) excluiria por engano os
+// outros tickers da mesma classe também.
+double CalcularResultadoFinanceiroDoDiaPorConfig(const ConfigAtivo &config, string simboloExcluir)
 {
    datetime inicioDoDia = iTime(_Symbol, PERIOD_D1, 0);
    double lucroTotalDia = 0.0;
@@ -1709,7 +1801,8 @@ double CalcularResultadoFinanceiroDoDiaPorPrefixo(string prefixo)
       if(ticketDeal > 0)
       {
          string ativoDeal = HistoryDealGetString(ticketDeal, DEAL_SYMBOL);
-         if(StringFind(ativoDeal, prefixo) == 0)
+         if(ativoDeal == simboloExcluir) continue; // já contado separadamente (PnL do gráfico atual)
+         if(SimboloBateComConfig(ativoDeal, config))
          {
             double lucroDeal    = HistoryDealGetDouble(ticketDeal, DEAL_PROFIT);
             double swapDeal     = HistoryDealGetDouble(ticketDeal, DEAL_SWAP);
@@ -2053,7 +2146,8 @@ void AtualizarPainelVisualEmTempoReal()
    double limiteLossEfetivo = todosGanhosHoje ? (pnlDiarioAtual - lftAtual) : acumRegAtual;
 
    bool limiteOrdensAtingido = (operacoesFeitasHoje >= maxOrdensPermitidas);
-   bool limiteLossAtingido    = (pnlDiarioAtual <= limiteLossEfetivo);
+   // Mesma guarda das outras duas checagens - ver comentário em BloqueadoPorLimiteDiario().
+   bool limiteLossAtingido    = (limiteLossEfetivo < 0.0) && (pnlDiarioAtual <= limiteLossEfetivo);
    bool limiteGainAtingido    = (pnlDiarioAtual >= acumProgAtual);
    bool algumLimiteAtingido   = (limiteOrdensAtingido || limiteLossAtingido || limiteGainAtingido);
 
@@ -2209,17 +2303,19 @@ void AtualizarPainelVisualEmTempoReal()
    // deslocado dinamicamente pela altura que ele ocupar.
    InfoPosicaoExtra posicoesExtra[];
    int qtdExtras = ColetarPosicoesExtraGrafico(posicoesExtra);
-   int maxExtrasPossivel = ArraySize(ConfigsDisponiveis) - 1; // no máximo, todos os outros ativos configurados
+   // Com "Ações/ETF/FII" podendo casar com várias posições reais ao mesmo tempo, não existe
+   // mais um teto fixo de quantas linhas extras podem aparecer (não é mais "no máximo os
+   // outros ativos configurados"). Em vez disso, guarda o maior número de extras já
+   // mostrado nesta sessão, e usa ISSO como teto de limpeza - garante que nenhum objeto
+   // "EXTRA_POS" fique órfão na tela, mesmo que o número de posições extras varie bastante.
+   maiorQtdExtrasJaMostrada = (int)MathMax(maiorQtdExtrasJaMostrada, qtdExtras);
 
    // PnL diário GERAL = PnL diário do gráfico atual + PnL diário (realizado) de cada outro
-   // ativo suportado, buscado por PREFIXO no histórico - funciona mesmo sem posição aberta
-   // naquele ativo no momento (basta ter havido negócio hoje).
+   // ativo suportado, buscado pela CONFIG (SimboloBateComConfig) no histórico - funciona
+   // mesmo sem posição aberta naquele ativo no momento (basta ter havido negócio hoje).
    double pnlDiarioTotalTodos = pnlDiarioAtual;
    for(int c = 0; c < ArraySize(ConfigsDisponiveis); c++)
-   {
-      if(StringFind(_Symbol, ConfigsDisponiveis[c].prefixoSimbolo) == 0) continue; // já contado acima
-      pnlDiarioTotalTodos += CalcularResultadoFinanceiroDoDiaPorPrefixo(ConfigsDisponiveis[c].prefixoSimbolo);
-   }
+      pnlDiarioTotalTodos += CalcularResultadoFinanceiroDoDiaPorConfig(ConfigsDisponiveis[c], _Symbol);
    string strPnLTotal = DoubleToString(pnlDiarioTotalTodos, 2); StringReplace(strPnLTotal, ".", ",");
    string textoPnLTotal = StringFormat("PnL diário GERAL: R$ %s", strPnLTotal);
    color corPnLTotal = (pnlDiarioTotalTodos > 0.0) ? clrLimeGreen : (pnlDiarioTotalTodos < 0.0 ? C'252,70,70' : clrDarkGray);
@@ -2265,7 +2361,7 @@ void AtualizarPainelVisualEmTempoReal()
 
    // Remove objetos de posições extras que existiam num ciclo anterior mas não existem mais
    // agora (ex.: fechou a posição do WDO e só sobrou a do CCM) - evita "lixo" gráfico.
-   for(int i = qtdExtras; i < maxExtrasPossivel; i++)
+   for(int i = qtdExtras; i < maiorQtdExtrasJaMostrada; i++)
       ObjectDelete(0, PREFIX_TXT+"EXTRA_POS"+IntegerToString(i));
 
    // PnL diário + Posição do gráfico atual agora vêm DEPOIS do bloco de extras (antes vinham
