@@ -85,6 +85,7 @@ struct ConfigAtivo
    ModoDeteccao       modoDeteccao;          // como reconhecer o símbolo (prefixo fixo ou padrão de ação/ETF/FII)
    bool               valorPorPontoDinamico; // se true, ignora valorPorPontoPorLote e lê SYMBOL_TRADE_TICK_VALUE do símbolo
    bool               loteBaseadoEmVolumeMinimo; // se true, Lote Max final = tabela × SYMBOL_VOLUME_MIN do símbolo
+   int                incrementoGrandePapeis; // se > 0, mostra um par extra de botões "-N/+N" pra "Papéis por operação" (0 = não mostra, comportamento padrão)
 };
 
 //+------------------------------------------------------------------+
@@ -111,16 +112,16 @@ StructFase TabelaFasesWDO[11] =
 StructFase TabelaFasesWIN[11] =
 {
    {   0.0,    0.0,  0 },   // Índice 0 (Não usado)
-   { 150.0, -150.0,  1 },   // Fase 1
-   { 200.0, -200.0,  2 },   // Fase 2
-   { 250.0, -250.0,  3 },   // Fase 3
-   { 300.0, -250.0,  4 },   // Fase 4
-   { 350.0, -300.0,  5 },   // Fase 5
-   { 400.0, -350.0,  6 },   // Fase 6
-   { 450.0, -400.0,  7 },   // Fase 7
-   { 500.0, -400.0,  8 },   // Fase 8
-   { 550.0, -450.0,  9 },   // Fase 9
-   { 600.0, -500.0, 10 }    // Fase 10
+   {  50.0,  -50.0,  1 },   // Fase 1
+   { 100.0, -100.0,  2 },   // Fase 2
+   { 150.0, -150.0,  3 },   // Fase 3
+   { 200.0, -150.0,  4 },   // Fase 4
+   { 250.0, -200.0,  5 },   // Fase 5
+   { 300.0, -250.0,  6 },   // Fase 6
+   { 350.0, -250.0,  7 },   // Fase 7
+   { 400.0, -300.0,  8 },   // Fase 8
+   { 450.0, -350.0,  9 },   // Fase 9
+   { 500.0, -400.0, 10 }    // Fase 10
 };
 
 //+------------------------------------------------------------------+
@@ -130,17 +131,17 @@ StructFase TabelaFasesWIN[11] =
 //+------------------------------------------------------------------+
 StructFase TabelaFasesCCM[11] =
 {
-   { 0.0,  0.0,  0 },     // Índice 0 (Não usado)
-   { 10.0, -10.0,  1 },   // Fase 1
-   { 12.0, -12.0,  2 },   // Fase 2
-   { 14.0, -14.0,  3 },   // Fase 3
-   { 16.0, -14.0,  4 },   // Fase 4
-   { 18.0, -16.0,  5 },   // Fase 5
-   { 20.0, -18.0,  6 },   // Fase 6
-   { 22.0,-20.0,  7 },    // Fase 7
-   { 24.0,-20.0,  8 },    // Fase 8
-   { 26.0,-22.0,  9 },    // Fase 9
-   { 28.0,-24.0, 10 }     // Fase 10
+   {  0.0,  0.0,  0 },   // Índice 0 (Não usado)
+   {  5.0, -5.0,  1 },   // Fase 1
+   {  6.0, -6.0,  2 },   // Fase 2
+   {  7.0, -7.0,  3 },   // Fase 3
+   {  8.0, -7.0,  4 },   // Fase 4
+   {  9.0, -8.0,  5 },   // Fase 5
+   { 10.0, -9.0,  6 },   // Fase 6
+   { 11.0,-10.0,  7 },   // Fase 7
+   { 12.0,-10.0,  8 },   // Fase 8
+   { 13.0,-11.0,  9 },   // Fase 9
+   { 14.0,-12.0, 10 }    // Fase 10
 };
 
 //+------------------------------------------------------------------+
@@ -148,23 +149,43 @@ StructFase TabelaFasesCCM[11] =
 //| Mesma estrutura de fórmula do CCM (FORMULA_LOTE_MAX_FASE); "R$/pt"|
 //| e "Lote Max" aqui são valores ABSTRATOS da tabela - o R$/pt real  |
 //| vem de SYMBOL_TRADE_TICK_VALUE e o lote real de SYMBOL_VOLUME_MIN,|
-//| lidos em tempo real do símbolo, não daqui. Fase 5 tem LOSS        |
-//| positivo de propósito (mesmo padrão já visto no WIN - trava de    |
-//| lucro numa fase avançada, não é erro de digitação).                |
+//| lidos em tempo real do símbolo, não daqui.                        |
 //+------------------------------------------------------------------+
 StructFase TabelaFasesAcoes[11] =
 {
    {  0.0,  0.0,  0 },   // Índice 0 (Não usado)
    { 10.0, -10.0,  1 },   // Fase 1
-   { 12.0, -12.0,  2 },   // Fase 2
-   { 14.0, -14.0,  3 },   // Fase 3
-   { 16.0, -14.0,  4 },   // Fase 4
-   { 18.0, -16.0,  5 },   // Fase 5 
-   { 20.0, -18.0,  6 },   // Fase 6
-   { 22.0, -20.0,  7 },   // Fase 7
-   { 24.0, -20.0,  8 },   // Fase 8
-   { 26.0, -22.0,  9 },   // Fase 9
-   { 28.0, -24.0, 10 }    // Fase 10
+   { 12.0, -12.0,  3 },   // Fase 2
+   { 14.0, -14.0,  5 },   // Fase 3
+   { 16.0, -14.0,  7 },   // Fase 4
+   { 18.0, -16.0,  9 },   // Fase 5
+   { 20.0, -18.0, 11 },   // Fase 6
+   { 22.0, -20.0, 13 },   // Fase 7
+   { 24.0, -20.0, 15 },   // Fase 8
+   { 26.0, -22.0, 17 },   // Fase 9
+   { 28.0, -24.0, 19 }    // Fase 10
+};
+
+//+------------------------------------------------------------------+
+//| Tabela de fases - GOLD11 (ETF de ouro)                            |
+//| Ativo ESPECÍFICO (não a config genérica de Ações/ETF/FII): "Lote  |
+//| Max" aqui já é a quantidade FINAL de cotas por fase (não um valor |
+//| abstrato multiplicado depois), e o R$/ponto é FIXO (0,01), não    |
+//| lido do símbolo em tempo real - validado uma vez, como WDO/CCM.   |
+//+------------------------------------------------------------------+
+StructFase TabelaFasesGOLD11[11] =
+{
+   {  0.0,  0.0,    0 },   // Índice 0 (Não usado)
+   { 10.0, -10.0,  500 },   // Fase 1
+   { 12.0, -12.0,  600 },   // Fase 2
+   { 14.0, -14.0,  700 },   // Fase 3
+   { 16.0, -14.0,  800 },   // Fase 4
+   { 18.0, -16.0,  900 },   // Fase 5
+   { 20.0, -18.0, 1000 },   // Fase 6
+   { 22.0, -20.0, 1100 },   // Fase 7
+   { 24.0, -20.0, 1200 },   // Fase 8
+   { 26.0, -22.0, 1300 },   // Fase 9
+   { 28.0, -24.0, 1400 }    // Fase 10
 };
 
 //+------------------------------------------------------------------+
@@ -178,10 +199,11 @@ StructFase TabelaFasesAcoes[11] =
 //+------------------------------------------------------------------+
 ConfigAtivo ConfigsDisponiveis[] =
 {
-   { "WDO - Minidólar",   "WDO", {}, 10.00, CONV_DIRETA,           FORMULA_LOTE_MAX_FASE,   1, "pts",      DETECCAO_PREFIXO,     false, false },
-   { "WIN - Miniíndice",  "WIN", {},  0.20, CONV_MULTIPLICA_POINT, FORMULA_PAPEIS_USUARIO,  0, "pts",      DETECCAO_PREFIXO,     false, false },
-   { "CCM - Milho",       "CCM", {},  4.50, CONV_MULTIPLICA_POINT, FORMULA_LOTE_MAX_FASE,   1, "centavos", DETECCAO_PREFIXO,     false, false },
-   { "Ações/ETF/FII",     "",    {},  0.00, CONV_MULTIPLICA_POINT, FORMULA_LOTE_MAX_FASE,   1, "centavos", DETECCAO_SUFIXO_ACAO, true,  true  }
+   { "WDO - Minidólar",   "WDO",  {}, 10.00, CONV_DIRETA,           FORMULA_LOTE_MAX_FASE,   1, "pts",      DETECCAO_PREFIXO,     false, false, 0  },
+   { "WIN - Miniíndice",  "WIN",  {},  0.20, CONV_MULTIPLICA_POINT, FORMULA_PAPEIS_USUARIO,  0, "pts",      DETECCAO_PREFIXO,     false, false, 0  },
+   { "CCM - Milho",       "CCM",  {},  4.50, CONV_MULTIPLICA_POINT, FORMULA_LOTE_MAX_FASE,   1, "centavos", DETECCAO_PREFIXO,     false, false, 0  },
+   { "GOLD11 - ETF Ouro", "GOLD", {},  0.01, CONV_MULTIPLICA_POINT, FORMULA_LOTE_MAX_FASE,   1, "centavos", DETECCAO_PREFIXO,     false, false, 10 },
+   { "Ações/ETF/FII",     "",     {},  0.00, CONV_MULTIPLICA_POINT, FORMULA_LOTE_MAX_FASE,   1, "centavos", DETECCAO_SUFIXO_ACAO, true,  true,  0  }
 };
 
 // Copia a tabela de fases correta para dentro de cada ConfigAtivo. Feito em uma função
@@ -193,7 +215,8 @@ void PrepararTabelasDosAtivos()
    ArrayCopy(ConfigsDisponiveis[0].tabelaFases, TabelaFasesWDO);
    ArrayCopy(ConfigsDisponiveis[1].tabelaFases, TabelaFasesWIN);
    ArrayCopy(ConfigsDisponiveis[2].tabelaFases, TabelaFasesCCM);
-   ArrayCopy(ConfigsDisponiveis[3].tabelaFases, TabelaFasesAcoes);
+   ArrayCopy(ConfigsDisponiveis[3].tabelaFases, TabelaFasesGOLD11);
+   ArrayCopy(ConfigsDisponiveis[4].tabelaFases, TabelaFasesAcoes);
 }
 
 // Reconhece um ticker de ação/ETF/FII pelo PADRÃO do nome, não por lista fechada de

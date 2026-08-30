@@ -399,6 +399,8 @@ int OnInit()
    ObjectDelete(0, "Btn_FaseMais");
    ObjectDelete(0, "Btn_PapelMenos");
    ObjectDelete(0, "Btn_PapelMais");
+   ObjectDelete(0, "Btn_PapelMenosGrande");
+   ObjectDelete(0, "Btn_PapelMaisGrande");
    ObjectDelete(0, "Btn_NegMenos");
    ObjectDelete(0, "Btn_NegMais");
    ObjectDelete(0, "Btn_PainelCima");
@@ -433,6 +435,8 @@ void OnDeinit(const int reason)
    ObjectDelete(0, "Btn_FaseMais");
    ObjectDelete(0, "Btn_PapelMenos");
    ObjectDelete(0, "Btn_PapelMais");
+   ObjectDelete(0, "Btn_PapelMenosGrande");
+   ObjectDelete(0, "Btn_PapelMaisGrande");
    ObjectDelete(0, "Btn_NegMenos");
    ObjectDelete(0, "Btn_NegMais");
    ObjectDelete(0, "Btn_PainelCima");
@@ -560,6 +564,18 @@ void OnChartEvent(const int id, const long& lparam, const double& dparam, const 
       else if(sparam == "Btn_PapelMais")
       {
          papeisPorOperacao = (int)MathMin(ObterLoteMaxFinal(faseAtual), papeisPorOperacao + ObterIncrementoPapeis());
+         SalvarEstadoPersistente();
+         ChartRedraw(0);
+      }
+      else if(sparam == "Btn_PapelMenosGrande")
+      {
+         papeisPorOperacao = (int)MathMax(ObterVolumeMinimoNegociavel(), papeisPorOperacao - cfgAtiva.incrementoGrandePapeis);
+         SalvarEstadoPersistente();
+         ChartRedraw(0);
+      }
+      else if(sparam == "Btn_PapelMaisGrande")
+      {
+         papeisPorOperacao = (int)MathMin(ObterLoteMaxFinal(faseAtual), papeisPorOperacao + cfgAtiva.incrementoGrandePapeis);
          SalvarEstadoPersistente();
          ChartRedraw(0);
       }
@@ -2408,6 +2424,22 @@ void AtualizarPainelVisualEmTempoReal()
    // Botões da linha 4 (índice 3) - papéis por operação
    CriarBotaoFase("Btn_PapelMenos", "-", 89, GetLinhaY(3), 28, 16);
    CriarBotaoFase("Btn_PapelMais",  "+", 60,  GetLinhaY(3), 28, 16);
+
+   // Botões extras de incremento grande (-10/+10, etc.) - só aparecem quando o ativo pede
+   // isso (cfgAtiva.incrementoGrandePapeis > 0, ex.: GOLD11). Ficam na mesma linha, mais
+   // afastados do centro que os botões de +1/-1, que continuam exatamente onde estavam.
+   if(cfgAtiva.incrementoGrandePapeis > 0)
+   {
+      string rotuloMenos = "-" + IntegerToString(cfgAtiva.incrementoGrandePapeis);
+      string rotuloMais  = "+" + IntegerToString(cfgAtiva.incrementoGrandePapeis);
+      CriarBotaoFase("Btn_PapelMenosGrande", rotuloMenos, 149, GetLinhaY(3), 28, 16);
+      CriarBotaoFase("Btn_PapelMaisGrande",  rotuloMais,  120, GetLinhaY(3), 28, 16);
+   }
+   else
+   {
+      ObjectDelete(0, "Btn_PapelMenosGrande");
+      ObjectDelete(0, "Btn_PapelMaisGrande");
+   }
 
    // Botões da linha 7 (índice 6) - negócios por dia (+2/-2)
    CriarBotaoFase("Btn_NegMenos", "-2", 89, GetLinhaY(6), 28, 16);
