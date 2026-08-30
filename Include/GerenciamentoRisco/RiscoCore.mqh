@@ -59,8 +59,14 @@ const int MAX_TENTATIVAS_SOM_SAIDA = 60; // ~60 * 50ms = 3 segundos antes de usa
 // e tenta reaplicar automaticamente, avisando o usuário.
 double slAlvoPosicaoAtual = 0.0;
 double tpAlvoPosicaoAtual = 0.0;
-int    contadorCiclosSemProtecao = 0;
-const int CICLOS_ENTRE_TENTATIVAS_PROTECAO = 20; // ~20 * 50ms = 1s entre tentativas de reaplicar
+// O watchdog agora usa tempo real (GetTickCount()) em vez de contar ciclos - contar ciclos
+// dependia do timer normal estar sempre em ~50ms; com o timer configurável (hoje 1500ms),
+// "20 ciclos" deixou de significar "~1s" e passou a significar dezenas de segundos. Além
+// disso, o timer é acelerado temporariamente (mesma técnica do flash dos botões) enquanto
+// houver uma posição sem SL/TP, garantindo que o watchdog reaja rápido de verdade, e volta
+// ao intervalo normal assim que a proteção for restaurada.
+uint   ultimaTentativaProtecaoMs = 0;
+const uint INTERVALO_TENTATIVA_PROTECAO_MS = 1000; // ~1s entre tentativas de reaplicar SL/TP
 int    tentativasSomProtecaoFalha = 0;           // já tocou o som de erro nesta falha de proteção? (0 = não, 1 = sim)
 const int MAX_TENTATIVAS_SOM_PROTECAO = 1;       // som toca só 1x por episódio - o painel (status) já avisa nas tentativas seguintes
 
@@ -90,7 +96,7 @@ int totalLinhasPainelAtual = 12;
 string botaoPendenteDeReset = "";
 uint   tickBotaoPendenteDeReset = 0;
 const uint DURACAO_VISUAL_CLIQUE_MS = 100;
-const uint INTERVALO_TIMER_NORMAL_MS = 2000; // deve bater com o valor passado em EventSetMillisecondTimer() no OnInit
+const uint INTERVALO_TIMER_NORMAL_MS = 1500; // deve bater com o valor passado em EventSetMillisecondTimer() no OnInit
 const uint INTERVALO_TIMER_RAPIDO_MS = 50;   // usado só enquanto há um botão aguardando o reset visual
 
 // Fila de sons de gain/loss: como o PlaySound() só tem um canal de áudio, tocar dois sons
@@ -361,7 +367,7 @@ int OnInit()
    // sem isso, o watchdog perderia a referência do que deveria estar aplicado.
    slAlvoPosicaoAtual = 0.0;
    tpAlvoPosicaoAtual = 0.0;
-   contadorCiclosSemProtecao = 0;
+   ultimaTentativaProtecaoMs = 0;
    if(PositionSelect(_Symbol))
    {
       slAlvoPosicaoAtual = PositionGetDouble(POSITION_SL);
@@ -1226,7 +1232,7 @@ void EnviarOrdemMercado()
          // mesmo que a tentativa abaixo falhe agora, o watchdog vai insistir nos próximos ticks.
          slAlvoPosicaoAtual = slFinal;
          tpAlvoPosicaoAtual = tpFinal;
-         contadorCiclosSemProtecao = 0;
+         ultimaTentativaProtecaoMs = 0;
 
          // Até 3 tentativas imediatas (situações transitórias, ex.: preço se moveu entre a
          // execução e esta chamada); se ainda assim falhar, o watchdog assume a partir daqui.
@@ -1442,15 +1448,22 @@ void ProcessarSomDeSaidaPendente()
 // evita o cenário relatado de uma posição ficar sem proteção nenhuma sem ninguém perceber.
 void GarantirProtecaoDaPosicao()
 {
-   if(slAlvoPosicaoAtual == 0.0 && tpAlvoPosicaoAtual == 0.0) return; // nada a proteger
+   if(slAlvoPosicaoAtual == 0.0 && tpAlvoPosicaoAtual == 0.0)
+   {
+      // Nada a proteger - garante que o timer não fique "preso" acelerado, caso a posição
+      // tenha sido fechada por outro caminho (ex.: FecharPosicaoAberta/CTRL+Enter) enquanto
+      // o watchdog estava com o timer rápido ativo.
+      EventSetMillisecondTimer(INTERVALO_TIMER_NORMAL_MS);
+      return;
+   }
 
    if(!PositionSelect(_Symbol))
    {
       // Posição já não existe mais (foi fechada) - nada mais a proteger.
       slAlvoPosicaoAtual = 0.0;
       tpAlvoPosicaoAtual = 0.0;
-      contadorCiclosSemProtecao = 0;
       tentativasSomProtecaoFalha = 0;
+      EventSetMillisecondTimer(INTERVALO_TIMER_NORMAL_MS); // nada mais a proteger - timer volta ao normal
       return;
    }
 
@@ -1462,13 +1475,17 @@ void GarantirProtecaoDaPosicao()
 
    if(!faltaSL && !faltaTP)
    {
-      contadorCiclosSemProtecao = 0; // proteção ok, nada a fazer
       tentativasSomProtecaoFalha = 0;
+      EventSetMillisecondTimer(INTERVALO_TIMER_NORMAL_MS); // protegida - timer volta ao normal
       return;
    }
 
-   contadorCiclosSemProtecao++;
-   if(contadorCiclosSemProtecao % CICLOS_ENTRE_TENTATIVAS_PROTECAO != 0) return; // evita martelar a corretora
+   // Posição SEM SL/TP: acelera o timer pra reagir rápido, independente de qual intervalo
+   // normal estiver configurado - mesma técnica já usada no flash visual dos botões.
+   EventSetMillisecondTimer(INTERVALO_TIMER_RAPIDO_MS);
+
+   if(GetTickCount() - ultimaTentativaProtecaoMs < INTERVALO_TENTATIVA_PROTECAO_MS) return; // evita martelar a corretora
+   ultimaTentativaProtecaoMs = GetTickCount();
 
    globalMensagemStatus = "ALERTA: Posição SEM SL/TP! Corrigindo automaticamente...";
 
@@ -1610,7 +1627,7 @@ void FecharPosicaoAberta()
          tentativasSomSaida = 0;
          slAlvoPosicaoAtual = 0.0;
          tpAlvoPosicaoAtual = 0.0;
-         contadorCiclosSemProtecao = 0;
+         ultimaTentativaProtecaoMs = 0;
          globalMensagemStatus = "(C ou SHIFT) Compra | (V ou CTRL) Venda";
          posicaoEstavaAberta = false;
       }
