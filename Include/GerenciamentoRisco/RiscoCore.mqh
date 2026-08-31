@@ -2325,10 +2325,10 @@ void AtualizarPainelVisualEmTempoReal()
    CriarTextoLabel(PREFIX_TXT+"0",  textoPnLMensal, MARGEM_DIREITA_TEXTO, GetLinhaY(0), 10, corPnLMensal, cantoPainelAtual);
    CriarSeparador(PREFIX_TXT+"1",   MARGEM_DIREITA_TEXTO, GetLinhaY(1)+OffsetParaBaixo(7), LARGURA_SEPARADOR, clrSilver, cantoPainelAtual);
    CriarTextoLabel(PREFIX_TXT+"2",  textoFase,       MARGEM_DIREITA_TEXTO, GetLinhaY(2), 10, clrDodgerBlue, cantoPainelAtual);
-   CriarTextoLabel(PREFIX_TXT+"3",  textoPapeis,     MARGEM_DIREITA_TEXTO, GetLinhaY(3), 10, clrDodgerBlue, cantoPainelAtual);
-   CriarTextoLabel(PREFIX_TXT+"4",  textoLFT,        MARGEM_DIREITA_TEXTO, GetLinhaY(4), 10, corLFT, cantoPainelAtual);
+   CriarTextoLabel(PREFIX_TXT+"4",  textoLFT,        MARGEM_DIREITA_TEXTO, GetLinhaY(3), 10, corLFT, cantoPainelAtual);
+   CriarTextoLabel(PREFIX_TXT+"3",  textoPapeis,     MARGEM_DIREITA_TEXTO, GetLinhaY(4), 10, clrDodgerBlue, cantoPainelAtual);
    CriarTextoLabel(PREFIX_TXT+"5",  textoAcumulos,   MARGEM_DIREITA_TEXTO, GetLinhaY(5), 10, CorContrasteComFundo(), cantoPainelAtual);
-   CriarTextoLabel(PREFIX_TXT+"6",  textoNegocios,   MARGEM_DIREITA_TEXTO, GetLinhaY(6), 10, clrSteelBlue, cantoPainelAtual);
+   CriarTextoLabel(PREFIX_TXT+"6",  textoNegocios,   MARGEM_DIREITA_TEXTO, GetLinhaY(6), 10, clrDodgerBlue, cantoPainelAtual);
    CriarSeparador(PREFIX_TXT+"7",   MARGEM_DIREITA_TEXTO, GetLinhaY(7)+OffsetParaBaixo(7), LARGURA_SEPARADOR, clrSilver, cantoPainelAtual);
    // ---- Posições de outros ativos suportados (WDO/WIN/CCM, o que não for o do gráfico
    // atual) - só aparecem (com separadores e o texto de instrução do atalho) quando há
@@ -2422,8 +2422,8 @@ void AtualizarPainelVisualEmTempoReal()
    CriarBotaoFase("Btn_FaseMais",  "+", 60,  GetLinhaY(2)-1, 28, 16);
 
    // Botões da linha 4 (índice 3) - papéis por operação
-   CriarBotaoFase("Btn_PapelMenos", "-", 89, GetLinhaY(3), 28, 16);
-   CriarBotaoFase("Btn_PapelMais",  "+", 60,  GetLinhaY(3), 28, 16);
+   CriarBotaoFase("Btn_PapelMenos", "-", 89, GetLinhaY(4), 28, 16);
+   CriarBotaoFase("Btn_PapelMais",  "+", 60,  GetLinhaY(4), 28, 16);
 
    // Botões extras de incremento grande (-10/+10, etc.) - só aparecem quando o ativo pede
    // isso (cfgAtiva.incrementoGrandePapeis > 0, ex.: GOLD11). Ficam na mesma linha, mais
@@ -2432,8 +2432,8 @@ void AtualizarPainelVisualEmTempoReal()
    {
       string rotuloMenos = "-" + IntegerToString(cfgAtiva.incrementoGrandePapeis);
       string rotuloMais  = "+" + IntegerToString(cfgAtiva.incrementoGrandePapeis);
-      CriarBotaoFase("Btn_PapelMenosGrande", rotuloMenos, 149, GetLinhaY(3), 28, 16);
-      CriarBotaoFase("Btn_PapelMaisGrande",  rotuloMais,  120, GetLinhaY(3), 28, 16);
+      CriarBotaoFase("Btn_PapelMenosGrande", rotuloMenos, 149, GetLinhaY(4), 28, 16);
+      CriarBotaoFase("Btn_PapelMaisGrande",  rotuloMais,  120, GetLinhaY(4), 28, 16);
    }
    else
    {
