@@ -1809,20 +1809,16 @@ void CalcularMetricasDoDia()
    }
 }
 
-// Mesma lógica de CalcularResultadoFinanceiroDoDia(), mas filtrando pela CONFIG do ativo
-// (via SimboloBateComConfig, não um prefixo cru) em vez do _Symbol exato do gráfico atual -
-// usada para somar o resultado do dia de outros ativos suportados no "PnL diário GERAL" do
-// painel, sem depender de haver posição aberta selecionada naquele ativo. IMPORTANTE: usar
-// SimboloBateComConfig (não StringFind direto num prefixo) é o que permite isso funcionar
-// corretamente pra "Ações/ETF/FII" também - essa config tem prefixoSimbolo vazio (detecção
-// é por padrão de sufixo, não prefixo), então comparar por prefixo cru bateria com QUALQUER
-// negócio da conta.
-// "simboloExcluir" tira um símbolo específico da soma (o do gráfico atual, já contado à
-// parte via pnlDiarioAtual) - necessário porque, pra "Ações/ETF/FII", uma config pode casar
-// com VÁRIOS tickers diferentes ao mesmo tempo (ex.: PETR4 e VALE3); simplesmente "pular a
-// config inteira quando ela bate com o gráfico atual" (como antes) excluiria por engano os
-// outros tickers da mesma classe também.
-double CalcularResultadoFinanceiroDoDiaPorConfig(const ConfigAtivo &config, string simboloExcluir)
+// Soma o resultado financeiro do dia de TODOS os ativos suportados, numa ÚNICA passada
+// pelo histórico - substituiu a versão anterior (que somava cada config separadamente),
+// porque isso causava CONTAGEM EM DOBRO: tickers de ativos específicos (WDOU26, WINV26,
+// CCMU26, GOLD11...) coincidentemente também batem no padrão genérico de "Ações/ETF/FII"
+// (letras + dígitos), então cada negócio deles acabava sendo somado uma vez pela config
+// específica E outra vez pela genérica.
+// Aqui, cada negócio é atribuído a UMA ÚNICA config - a de MAIOR prioridade que bater com
+// ele (mesma ordem usada por DetectarConfigAtivo(): específicos primeiro, genérica de Ações
+// por último) - e contado uma vez só, não importa quantos padrões diferentes ele combine.
+double CalcularPnLDiarioGeral()
 {
    datetime inicioDoDia = iTime(_Symbol, PERIOD_D1, 0);
    double lucroTotalDia = 0.0;
@@ -1833,19 +1829,26 @@ double CalcularResultadoFinanceiroDoDiaPorConfig(const ConfigAtivo &config, stri
    for(int i = 0; i < totalDeals; i++)
    {
       ulong ticketDeal = HistoryDealGetTicket(i);
-      if(ticketDeal > 0)
-      {
-         string ativoDeal = HistoryDealGetString(ticketDeal, DEAL_SYMBOL);
-         if(ativoDeal == simboloExcluir) continue; // já contado separadamente (PnL do gráfico atual)
-         if(SimboloBateComConfig(ativoDeal, config))
-         {
-            double lucroDeal    = HistoryDealGetDouble(ticketDeal, DEAL_PROFIT);
-            double swapDeal     = HistoryDealGetDouble(ticketDeal, DEAL_SWAP);
-            double comissaoDeal = HistoryDealGetDouble(ticketDeal, DEAL_COMMISSION);
+      if(ticketDeal <= 0) continue;
 
-            lucroTotalDia += (lucroDeal + swapDeal + comissaoDeal);
+      string ativoDeal = HistoryDealGetString(ticketDeal, DEAL_SYMBOL);
+
+      bool pertenceAAlgumAtivoSuportado = false;
+      for(int c = 0; c < ArraySize(ConfigsDisponiveis); c++)
+      {
+         if(SimboloBateComConfig(ativoDeal, ConfigsDisponiveis[c]))
+         {
+            pertenceAAlgumAtivoSuportado = true;
+            break; // já achou a config de maior prioridade - não continua checando as outras
          }
       }
+      if(!pertenceAAlgumAtivoSuportado) continue;
+
+      double lucroDeal    = HistoryDealGetDouble(ticketDeal, DEAL_PROFIT);
+      double swapDeal     = HistoryDealGetDouble(ticketDeal, DEAL_SWAP);
+      double comissaoDeal = HistoryDealGetDouble(ticketDeal, DEAL_COMMISSION);
+
+      lucroTotalDia += (lucroDeal + swapDeal + comissaoDeal);
    }
 
    return lucroTotalDia;
@@ -2345,12 +2348,11 @@ void AtualizarPainelVisualEmTempoReal()
    // "EXTRA_POS" fique órfão na tela, mesmo que o número de posições extras varie bastante.
    maiorQtdExtrasJaMostrada = (int)MathMax(maiorQtdExtrasJaMostrada, qtdExtras);
 
-   // PnL diário GERAL = PnL diário do gráfico atual + PnL diário (realizado) de cada outro
-   // ativo suportado, buscado pela CONFIG (SimboloBateComConfig) no histórico - funciona
-   // mesmo sem posição aberta naquele ativo no momento (basta ter havido negócio hoje).
-   double pnlDiarioTotalTodos = pnlDiarioAtual;
-   for(int c = 0; c < ArraySize(ConfigsDisponiveis); c++)
-      pnlDiarioTotalTodos += CalcularResultadoFinanceiroDoDiaPorConfig(ConfigsDisponiveis[c], _Symbol);
+   // PnL diário GERAL = soma do resultado do dia de TODOS os ativos suportados (inclusive o
+   // do gráfico atual), numa única passada pelo histórico - ver CalcularPnLDiarioGeral()
+   // pra saber por que isso substituiu o cálculo antigo (que somava cada config separado e
+   // contava alguns negócios em dobro).
+   double pnlDiarioTotalTodos = CalcularPnLDiarioGeral();
    string strPnLTotal = DoubleToString(pnlDiarioTotalTodos, 2); StringReplace(strPnLTotal, ".", ",");
    string textoPnLTotal = StringFormat("PnL diário GERAL: R$ %s", strPnLTotal);
    color corPnLTotal = (pnlDiarioTotalTodos > 0.0) ? clrLimeGreen : (pnlDiarioTotalTodos < 0.0 ? C'252,70,70' : clrDarkGray);
