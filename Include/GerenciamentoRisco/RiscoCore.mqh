@@ -17,11 +17,34 @@ ConfigAtivo cfgAtiva;
 input group "--- Configurações Operacionais ---"
 input int               InpFaseInicial       = 1;           // Fase Inicial do Trader (1 a 10)
 input int               InpNegociosDiaInicial = 3;           // Negócios (pares C/V) permitidos por dia - deve ser ímpar
+input int               InpMaxOrdensPendentes = 2;           // Máximo de ordens pendentes simultâneas (1 a 4)
 
 const string PREFIX_OBJ = "Proj_";
 const int NEGOCIOS_DIA_MINIMO = 3; // piso mínimo de "Negócios por dia" - o botão "-2" nunca pode ir abaixo disso
 const string PREFIX_TXT = "Painel_";
 const string LABEL_PRECO_POSICAO = "LABEL_PRECO_POSICAO";
+
+// Identifica as ordens/posições deste robô (via trade.SetExpertMagicNumber no OnInit),
+// separando-as de ordens manuais ou de outro EA no mesmo símbolo - usado para reconstruir
+// a lista de ordens pendentes depois de um reload (troca de timeframe, recompilação, etc.)
+// e para o OnTradeTransaction saber se um negócio executado pertence a este grupo.
+const long MAGIC_NUMBER_ROBO = 552031;
+
+// Uma ordem pendente registrada por este robô - até InpMaxOrdensPendentes (máx. 4) podem
+// coexistir ao mesmo tempo, formando um grupo "OCO" (One-Cancels-Other): assim que UMA
+// executa, as demais são canceladas automaticamente (ver OnTradeTransaction).
+struct InfoOrdemPendente
+{
+   ulong    ticket;
+   int      tipoOperacao;   // 1 = compra, 2 = venda
+   double   volume;
+   double   precoAlvo;
+   double   slAlvo;
+   double   tpAlvo;
+   datetime horarioCriacao; // ORDER_TIME_SETUP - usado para decidir qual é "a mais nova"
+};
+InfoOrdemPendente listaOrdensPendentes[];
+int maiorQtdPendentesJaMostrada = 0; // teto de limpeza dos objetos de painel (mesmo padrão das posições extra-gráfico)
 
 // Variáveis globais de controle de estado e fases
 int  faseAtual = 1;
@@ -355,6 +378,23 @@ int OnInit()
    // (trade.Buy()/Sell() retorna false e nenhuma ordem é enviada, sem nenhum aviso visível).
    trade.SetTypeFillingBySymbol(_Symbol);
    trade.SetDeviationInPoints(10);
+   trade.SetExpertMagicNumber(MAGIC_NUMBER_ROBO);
+
+   // Reconstrói a lista de ordens pendentes deste robô (filtradas por símbolo + magic
+   // number) - sem isso, um reload do EA (troca de timeframe, recompilação) com pendentes
+   // já lançadas faria o robô "esquecer" delas, mesmo elas continuando ativas na corretora.
+   AtualizarListaOrdensPendentes();
+
+   // globalMensagemStatus só é atualizada em eventos pontuais (enviar, cancelar), nunca
+   // recalculada sozinha a cada ciclo - sem isso, depois de um reload com pendentes já
+   // ativas, a linha de instrução no painel voltava pro texto genérico ("(C ou SHIFT)
+   // Compra..."), mesmo com as pendentes continuando ativas de verdade na corretora (as
+   // linhas "Pendente ..." do painel continuavam aparecendo certinho, só a instrução que
+   // ficava desatualizada). Restaura a mensagem certa aqui, refletindo o estado recém-lido.
+   if(QtdOrdensPendentes() > 0)
+   {
+      globalMensagemStatus = StringFormat("Pendente(s): %d - CTRL+Enter cancela a mais nova", QtdOrdensPendentes());
+   }
 
    baseNegociosDia = MathMax(NEGOCIOS_DIA_MINIMO, InpNegociosDiaInicial);
    if(baseNegociosDia % 2 == 0) baseNegociosDia++; // garante número ímpar
@@ -395,6 +435,7 @@ int OnInit()
    ObjectDelete(0, PREFIX_TXT+"EXTRA_SEP_B");
    ObjectDelete(0, PREFIX_TXT+"SEP_STATUS");
    for(int i=0; i<20; i++) ObjectDelete(0, PREFIX_TXT+"EXTRA_POS"+IntegerToString(i)); // limite generoso - "Ações/ETF/FII" não tem teto fixo de posições simultâneas
+   for(int i=0; i<4; i++) ObjectDelete(0, PREFIX_TXT+"PENDENTE"+IntegerToString(i)); // teto real (InpMaxOrdensPendentes <= 4)
    ObjectDelete(0, "Btn_FaseMenos");
    ObjectDelete(0, "Btn_FaseMais");
    ObjectDelete(0, "Btn_PapelMenos");
@@ -431,6 +472,7 @@ void OnDeinit(const int reason)
    ObjectDelete(0, PREFIX_TXT+"EXTRA_SEP_B");
    ObjectDelete(0, PREFIX_TXT+"SEP_STATUS");
    for(int i=0; i<20; i++) ObjectDelete(0, PREFIX_TXT+"EXTRA_POS"+IntegerToString(i)); // limite generoso - "Ações/ETF/FII" não tem teto fixo de posições simultâneas
+   for(int i=0; i<4; i++) ObjectDelete(0, PREFIX_TXT+"PENDENTE"+IntegerToString(i)); // teto real (InpMaxOrdensPendentes <= 4)
    ObjectDelete(0, "Btn_FaseMenos");
    ObjectDelete(0, "Btn_FaseMais");
    ObjectDelete(0, "Btn_PapelMenos");
@@ -453,6 +495,33 @@ void OnTick()
 void OnTimer()
 {
    ProcessarRotinasDeAtualizacao();
+}
+
+// Disparado pelo terminal em tempo real, assim que qualquer negócio/ordem muda de estado -
+// muito mais rápido que esperar o próximo ciclo do timer (hoje configurável, podendo estar
+// a 2500ms). Usado só para detectar quando uma ordem PENDENTE deste robô EXECUTA (virou
+// posição): nesse instante, cancela imediatamente as demais pendentes do grupo
+// (comportamento OCO - "uma executa, cancela as outras"), sem a janela de tempo que
+// esperar pelo ciclo normal deixaria aberta.
+void OnTradeTransaction(const MqlTradeTransaction &trans, const MqlTradeRequest &request, const MqlTradeResult &result)
+{
+   if(trans.type != TRADE_TRANSACTION_DEAL_ADD) return;
+   if(trans.symbol != _Symbol) return;
+   if(QtdOrdensPendentes() == 0) return; // nada a cancelar - evita trabalho desnecessário a cada negócio
+
+   if(!HistoryDealSelect(trans.deal)) return;
+
+   long magicDoDeal   = HistoryDealGetInteger(trans.deal, DEAL_MAGIC);
+   long entradaDoDeal = HistoryDealGetInteger(trans.deal, DEAL_ENTRY);
+
+   // DEAL_ENTRY_IN = abriu uma posição nova (seja pelo preenchimento de uma pendente, seja
+   // por uma ordem a mercado enviada enquanto pendentes do grupo ainda existiam) - em
+   // qualquer um dos dois casos, agora existe uma posição, então as pendentes que sobraram
+   // precisam ser canceladas.
+   if(magicDoDeal == MAGIC_NUMBER_ROBO && entradaDoDeal == DEAL_ENTRY_IN)
+   {
+      CancelarTodasAsOrdensPendentesDoGrupo();
+   }
 }
 
 // Trava contra reentrância: ProcessarRotinasDeAtualizacao() é chamada tanto pelo OnTick()
@@ -814,22 +883,133 @@ void OnChartEvent(const int id, const long& lparam, const double& dparam, const 
 }
 
 // Retorna o ticket da ordem pendente (Limit/Stop) deste símbolo, se existir alguma; ou 0.
-ulong TicketDaOrdemPendente()
+// Máximo de ordens pendentes simultâneas configurado (input), sempre limitado a 1-4 -
+// nunca confia no valor cru do input, caso o usuário digite algo fora da faixa.
+int ObterMaxOrdensPendentes()
 {
+   return (int)MathMax(1, MathMin(4, InpMaxOrdensPendentes));
+}
+
+// Reconstrói listaOrdensPendentes a partir das ordens REALMENTE abertas na corretora,
+// filtradas por símbolo + magic number deste robô - é a fonte da verdade (nunca confia só
+// em memória), chamada no OnInit (recuperar após reload) e sempre que a lista precisar
+// ser resincronizada (depois de enviar/cancelar uma ordem).
+void AtualizarListaOrdensPendentes()
+{
+   ArrayResize(listaOrdensPendentes, 0);
+
    int total = OrdersTotal();
    for(int i = 0; i < total; i++)
    {
       ulong ticket = OrderGetTicket(i);
-      if(ticket > 0 && OrderGetString(ORDER_SYMBOL) == _Symbol)
-         return ticket;
+      if(ticket == 0) continue;
+      if(OrderGetString(ORDER_SYMBOL) != _Symbol) continue;
+      if((long)OrderGetInteger(ORDER_MAGIC) != MAGIC_NUMBER_ROBO) continue;
+
+      ENUM_ORDER_TYPE tipo = (ENUM_ORDER_TYPE)OrderGetInteger(ORDER_TYPE);
+      if(tipo != ORDER_TYPE_BUY_LIMIT && tipo != ORDER_TYPE_BUY_STOP &&
+         tipo != ORDER_TYPE_SELL_LIMIT && tipo != ORDER_TYPE_SELL_STOP) continue; // ignora qualquer coisa que não seja pendente Limit/Stop deste robô
+
+      InfoOrdemPendente info;
+      info.ticket = ticket;
+      info.tipoOperacao = (tipo == ORDER_TYPE_BUY_LIMIT || tipo == ORDER_TYPE_BUY_STOP) ? 1 : 2;
+      info.volume = OrderGetDouble(ORDER_VOLUME_CURRENT);
+      info.precoAlvo = OrderGetDouble(ORDER_PRICE_OPEN);
+      info.slAlvo = OrderGetDouble(ORDER_SL);
+      info.tpAlvo = OrderGetDouble(ORDER_TP);
+      info.horarioCriacao = (datetime)OrderGetInteger(ORDER_TIME_SETUP);
+
+      int n = ArraySize(listaOrdensPendentes);
+      ArrayResize(listaOrdensPendentes, n + 1);
+      listaOrdensPendentes[n] = info;
    }
-   return 0;
+}
+
+int QtdOrdensPendentes()
+{
+   return ArraySize(listaOrdensPendentes);
+}
+
+// Verdadeiro se o robô pode armar/enviar uma NOVA ordem agora: nenhuma posição aberta
+// (regra que já existia) E ainda não atingiu o teto de ordens pendentes configurado.
+bool PodeArmarOuEnviarNovaOrdem()
+{
+   if(PositionSelect(_Symbol)) return false;
+   AtualizarListaOrdensPendentes();
+   return QtdOrdensPendentes() < ObterMaxOrdensPendentes();
+}
+
+// Índice, dentro de listaOrdensPendentes, da ordem mais RECENTE (maior horarioCriacao;
+// ticket maior como critério de desempate) - é sempre essa que o CTRL+Enter cancela.
+int IndiceDaOrdemPendenteMaisNova()
+{
+   int qtd = ArraySize(listaOrdensPendentes);
+   if(qtd == 0) return -1;
+
+   int indice = 0;
+   for(int i = 1; i < qtd; i++)
+   {
+      if(listaOrdensPendentes[i].horarioCriacao > listaOrdensPendentes[indice].horarioCriacao ||
+         (listaOrdensPendentes[i].horarioCriacao == listaOrdensPendentes[indice].horarioCriacao &&
+          listaOrdensPendentes[i].ticket > listaOrdensPendentes[indice].ticket))
+         indice = i;
+   }
+   return indice;
+}
+
+// CTRL+Enter, com pendentes existindo: cancela só a MAIS NOVA, uma por vez - da mais nova
+// para a mais antiga, exatamente como pedido (não zera tudo de uma vez; isso é papel do
+// CTRL+ESC+ENTER para posições, que deliberadamente não mexe em pendentes).
+void CancelarOrdemPendenteMaisNova()
+{
+   AtualizarListaOrdensPendentes();
+   int indice = IndiceDaOrdemPendenteMaisNova();
+   if(indice < 0) return;
+
+   ulong ticketParaCancelar = listaOrdensPendentes[indice].ticket;
+   int qtdAntes = ArraySize(listaOrdensPendentes);
+
+   if(trade.OrderDelete(ticketParaCancelar))
+   {
+      globalMensagemStatus = (qtdAntes - 1 > 0)
+         ? StringFormat("Ordem pendente cancelada! Restam %d.", qtdAntes - 1)
+         : "(C ou SHIFT) Compra | (V ou CTRL) Venda";
+      if(!PlaySound("cancelPendingOrder.wav")) PlaySound("\\Audio\\cancelPendingOrder.wav");
+   }
+   else
+   {
+      Print("[ERRO] Falha ao cancelar ordem pendente ", ticketParaCancelar, ". Retcode: ",
+            trade.ResultRetcode(), " - ", trade.ResultRetcodeDescription());
+      globalMensagemStatus = "Falha ao cancelar ordem pendente!";
+      if(!PlaySound("errorPlacingOrder.wav")) PlaySound("\\Audio\\errorPlacingOrder.wav");
+   }
+
+   AtualizarListaOrdensPendentes();
+}
+
+// Cancela TODAS as ordens pendentes do grupo de uma vez - usada pelo OnTradeTransaction
+// quando UMA delas executa (comportamento OCO: a primeira que disparar cancela as demais,
+// garantindo que só uma vire posição de verdade).
+void CancelarTodasAsOrdensPendentesDoGrupo()
+{
+   AtualizarListaOrdensPendentes();
+   int qtd = ArraySize(listaOrdensPendentes);
+   for(int i = 0; i < qtd; i++)
+   {
+      if(!trade.OrderDelete(listaOrdensPendentes[i].ticket))
+      {
+         Print("[ERRO] Falha ao cancelar ordem pendente do grupo (OCO) ", listaOrdensPendentes[i].ticket,
+               ". Retcode: ", trade.ResultRetcode(), " - ", trade.ResultRetcodeDescription());
+      }
+   }
+   AtualizarListaOrdensPendentes();
 }
 
 bool ExistePosicaoOuOrdemPendente()
 {
    if(PositionSelect(_Symbol)) return true;
-   return (TicketDaOrdemPendente() > 0);
+   AtualizarListaOrdensPendentes();
+   return (QtdOrdensPendentes() > 0);
 }
 
 // Verifica os limites diários (ordens/loss/gain, já considerando a extensão pelo LFT) e
@@ -840,9 +1020,10 @@ bool ExistePosicaoOuOrdemPendente()
 // uma ordem (executada ou pendente) ao mesmo tempo.
 bool BloqueadoPorLimiteDiario()
 {
-   if(ExistePosicaoOuOrdemPendente())
+   if(!PodeArmarOuEnviarNovaOrdem())
    {
-      // Já existe posição aberta ou ordem pendente - não deixa armar nem enviar outra.
+      // Já existe posição aberta, OU o teto de ordens pendentes simultâneas já foi
+      // atingido - não deixa armar nem enviar outra.
       return true;
    }
 
@@ -1261,11 +1442,12 @@ bool CondicaoAtivacaoLFT(double pnlDiarioAtual, double acumProgAtual)
 
 void EnviarOrdemMercado()
 {
-   // Camada extra de segurança: nunca envia uma nova ordem se já existe posição aberta ou
-   // ordem pendente, mesmo que o chamador já devesse ter checado isso via BloqueadoPorLimiteDiario().
-   if(ExistePosicaoOuOrdemPendente())
+   // Camada extra de segurança: nunca envia uma nova ordem se já existe posição aberta, OU
+   // se o teto de ordens pendentes simultâneas já foi atingido - mesmo que o chamador já
+   // devesse ter checado isso via BloqueadoPorLimiteDiario().
+   if(!PodeArmarOuEnviarNovaOrdem())
    {
-      globalMensagemStatus = "Já existe posição/ordem pendente! (CTRL+Enter) para cancelar antes.";
+      globalMensagemStatus = "Já existe posição, ou o teto de pendentes foi atingido! (CTRL+Enter) cancela a mais nova.";
       ApagarLinhasProjecao();
       return;
    }
@@ -1433,7 +1615,18 @@ void EnviarOrdemPendente(double pontosSL, double pontosTP)
    if(ordemOk)
    {
       ApagarLinhasProjecao();
-      globalMensagemStatus = StringFormat("Ordem pendente em %s! (CTRL+Enter) Cancela", DoubleToString(precoAlvo, _Digits));
+      // Reconsulta a lista pra pegar a ordem recém-criada (via trade.ResultOrder() seria uma
+      // alternativa, mas resincronizar direto da corretora garante que a lista reflita
+      // exatamente o que está realmente ativo, mesmo no caso raro de "preço igual",
+      // que envia a mercado em vez de criar uma pendente de verdade).
+      AtualizarListaOrdensPendentes();
+      int qtdAgora = QtdOrdensPendentes();
+      if(qtdAgora > 0)
+         // Mesmo texto usado ao restaurar a mensagem após um reload (ver OnInit) - assim a
+         // instrução fica igual tanto logo depois de enviar quanto depois de recompilar.
+         globalMensagemStatus = StringFormat("Pendente(s): %d - CTRL+Enter cancela a mais nova", qtdAgora);
+      else
+         globalMensagemStatus = StringFormat("Ordem pendente em %s! (CTRL+Enter) Cancela", DoubleToString(precoAlvo, _Digits));
    }
    else
    {
@@ -1752,23 +1945,13 @@ void FecharPosicaoAberta()
       return;
    }
 
-   // Sem posição aberta - mas pode existir uma ordem PENDENTE (Limit/Stop) esperando o
-   // preço, criada por SHIFT/CTRL. CTRL+Enter também cancela essa ordem pendente.
-   ulong ticketPendente = TicketDaOrdemPendente();
-   if(ticketPendente > 0)
+   // Sem posição aberta - mas pode existir uma ou mais ordens PENDENTES (Limit/Stop)
+   // esperando o preço, criadas por SHIFT/CTRL. CTRL+Enter cancela sempre a MAIS NOVA,
+   // uma por vez (aperte de novo para cancelar a próxima) - ver CancelarOrdemPendenteMaisNova().
+   AtualizarListaOrdensPendentes();
+   if(QtdOrdensPendentes() > 0)
    {
-      if(trade.OrderDelete(ticketPendente))
-      {
-         globalMensagemStatus = "(C ou SHIFT) Compra | (V ou CTRL) Venda";
-         if(!PlaySound("cancelPendingOrder.wav")) PlaySound("\\Audio\\cancelPendingOrder.wav");
-      }
-      else
-      {
-         Print("[ERRO] Falha ao cancelar ordem pendente ", ticketPendente, ". Retcode: ",
-               trade.ResultRetcode(), " - ", trade.ResultRetcodeDescription());
-         globalMensagemStatus = "Falha ao cancelar ordem pendente!";
-         if(!PlaySound("errorPlacingOrder.wav")) PlaySound("\\Audio\\errorPlacingOrder.wav");
-      }
+      CancelarOrdemPendenteMaisNova();
       return;
    }
 
@@ -2405,7 +2588,47 @@ void AtualizarPainelVisualEmTempoReal()
    // antes) - a linha exata depende de quantas linhas o bloco de extras ocupou acima.
    int linhaPnLDiario  = linhaBaseExtras + linhasOcupadasPorExtras;
    int linhaPosicao    = linhaPnLDiario + 1;
-   int linhaSepStatus  = linhaPosicao + 1; // separador entre a posição/PnL diário e o status/atalhos
+
+   // ---- Ordens pendentes deste robô no gráfico atual (0 a InpMaxOrdensPendentes linhas,
+   // dinâmico - igual ao bloco de posições extra-gráfico) - mostradas da mais NOVA pra mais
+   // antiga, a mesma ordem em que o CTRL+Enter cancela.
+   AtualizarListaOrdensPendentes();
+   int qtdPendentesAgora = QtdOrdensPendentes();
+   maiorQtdPendentesJaMostrada = (int)MathMax(maiorQtdPendentesJaMostrada, qtdPendentesAgora);
+
+   int linhaBasePendentes = linhaPosicao + 1;
+   if(qtdPendentesAgora > 0)
+   {
+      int indicesOrdenados[];
+      ArrayResize(indicesOrdenados, qtdPendentesAgora);
+      for(int i = 0; i < qtdPendentesAgora; i++) indicesOrdenados[i] = i;
+      // Ordenação simples por horário de criação decrescente (no máximo 4 elementos).
+      for(int i = 0; i < qtdPendentesAgora - 1; i++)
+         for(int j = i + 1; j < qtdPendentesAgora; j++)
+            if(listaOrdensPendentes[indicesOrdenados[j]].horarioCriacao > listaOrdensPendentes[indicesOrdenados[i]].horarioCriacao)
+            {
+               int tmp = indicesOrdenados[i];
+               indicesOrdenados[i] = indicesOrdenados[j];
+               indicesOrdenados[j] = tmp;
+            }
+
+      for(int i = 0; i < qtdPendentesAgora; i++)
+      {
+         InfoOrdemPendente info = listaOrdensPendentes[indicesOrdenados[i]];
+         string tipoStrPendente = (info.tipoOperacao == 1) ? "Compra" : "Venda";
+         string textoPendente = StringFormat("Pendente %s %d @ %s | SL %s TP %s",
+                                              tipoStrPendente, (int)info.volume, DoubleToString(info.precoAlvo, _Digits),
+                                              DoubleToString(info.slAlvo, _Digits), DoubleToString(info.tpAlvo, _Digits));
+         CriarTextoLabel(PREFIX_TXT+"PENDENTE"+IntegerToString(i), textoPendente,
+                          MARGEM_DIREITA_TEXTO, GetLinhaY(linhaBasePendentes+i), 10, clrDodgerBlue, cantoPainelAtual);
+      }
+   }
+   // Remove objetos de pendentes que existiam num ciclo anterior mas não existem mais agora
+   // (ex.: cancelou uma, ou uma executou) - evita "lixo" gráfico, mesmo padrão das posições extra-gráfico.
+   for(int i = qtdPendentesAgora; i < maiorQtdPendentesJaMostrada; i++)
+      ObjectDelete(0, PREFIX_TXT+"PENDENTE"+IntegerToString(i));
+
+   int linhaSepStatus  = linhaBasePendentes + qtdPendentesAgora; // separador entre a posição/pendentes e o status/atalhos
    int linhaStatus     = linhaSepStatus + 1;
    int linhaAtalhos    = linhaStatus + 1;
 
