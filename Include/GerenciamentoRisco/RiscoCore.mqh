@@ -192,8 +192,8 @@ void CarregarEstadoPersistente()
 //+------------------------------------------------------------------+
 int LINE_HEIGHT   = 16;
 int BASE_MARGIN   = 20;
-int MARGEM_DIREITA_TEXTO = 400;
-int LARGURA_SEPARADOR = 369; // largura do separador em pixels (independe de fonte/caracteres)
+int MARGEM_DIREITA_TEXTO = 430;
+int LARGURA_SEPARADOR = 399; // largura do separador em pixels (independe de fonte/caracteres)
 
 // Retorna a coordenada Y da "linha lógica" i (0..10, onde 0 = linha 1 da especificação).
 // Importante: o MetaTrader já mede o Y a partir do topo quando o canto é superior e a
@@ -638,13 +638,13 @@ void OnChartEvent(const int id, const long& lparam, const double& dparam, const 
       }
       else if(sparam == "Btn_PapelMenosGrande")
       {
-         papeisPorOperacao = (int)MathMax(ObterVolumeMinimoNegociavel(), papeisPorOperacao - cfgAtiva.incrementoGrandePapeis);
+         papeisPorOperacao = (int)MathMax(ObterVolumeMinimoNegociavel(), papeisPorOperacao - ObterIncrementoGrandePapeis());
          SalvarEstadoPersistente();
          ChartRedraw(0);
       }
       else if(sparam == "Btn_PapelMaisGrande")
       {
-         papeisPorOperacao = (int)MathMin(ObterLoteMaxFinal(faseAtual), papeisPorOperacao + cfgAtiva.incrementoGrandePapeis);
+         papeisPorOperacao = (int)MathMin(ObterLoteMaxFinal(faseAtual), papeisPorOperacao + ObterIncrementoGrandePapeis());
          SalvarEstadoPersistente();
          ChartRedraw(0);
       }
@@ -744,7 +744,7 @@ void OnChartEvent(const int id, const long& lparam, const double& dparam, const 
          if(!ctrlJuntoComEsc)
          {
             ApagarLinhasProjecao();
-            globalMensagemStatus = "(C ou SHIFT) Compra | (V ou CTRL) Venda";
+            AtualizarMensagemStatusOciosa();
          }
          return;
       }
@@ -967,13 +967,13 @@ void CancelarOrdemPendenteMaisNova()
    if(indice < 0) return;
 
    ulong ticketParaCancelar = listaOrdensPendentes[indice].ticket;
-   int qtdAntes = ArraySize(listaOrdensPendentes);
 
    if(trade.OrderDelete(ticketParaCancelar))
    {
-      globalMensagemStatus = (qtdAntes - 1 > 0)
-         ? StringFormat("Ordem pendente cancelada! Restam %d.", qtdAntes - 1)
-         : "(C ou SHIFT) Compra | (V ou CTRL) Venda";
+      // Sempre mostra a instrução completa (com CTRL+Enter, se ainda sobrar pendente), em
+      // vez de uma mensagem "Cancelada!" só de passagem - assim a orientação de como
+      // cancelar a próxima fica visível o tempo todo, não só num piscar de mensagem.
+      AtualizarMensagemStatusOciosa();
       if(!PlaySound("cancelPendingOrder.wav")) PlaySound("\\Audio\\cancelPendingOrder.wav");
    }
    else
@@ -1003,6 +1003,27 @@ void CancelarTodasAsOrdensPendentesDoGrupo()
       }
    }
    AtualizarListaOrdensPendentes();
+}
+
+// Define globalMensagemStatus para o texto "ocioso" correto (sem operação armada, sem
+// posição) - "Pendente(s): N - CTRL+Enter cancela a mais nova" se houver pendentes ativas,
+// ou o texto genérico se não houver nenhuma. Usada em todo lugar que "reseta" a mensagem de
+// status pra fora de um estado especial (armado, posição fechada, etc.), em vez de escrever
+// o texto genérico direto - sem isso, um reset "cego" podia sobrescrever por acidente uma
+// mensagem informativa que tinha acabado de aparecer. Exemplo real: segurar CTRL como parte
+// do combo CTRL+Enter (pra cancelar uma pendente) também é, por si só, o modificador que
+// arma uma prévia de venda - se ProcessarModificadoresDeArme() pegasse esse instante em que
+// CTRL está pressionado, ela armava a prévia; ao soltar o CTRL logo depois, o desarme
+// automático sobrescrevia "Ordem pendente cancelada! Restam N." pelo texto genérico, mesmo a
+// pendente tendo sido cancelada de verdade - por isso o problema era intermitente (dependia
+// do timing exato entre o ProcessarModificadoresDeArme() e o CTRL+Enter).
+void AtualizarMensagemStatusOciosa()
+{
+   AtualizarListaOrdensPendentes();
+   int qtd = QtdOrdensPendentes();
+   globalMensagemStatus = (qtd > 0)
+      ? StringFormat("Pendente(s): %d - CTRL+Enter cancela a mais nova", qtd)
+      : "(C ou SHIFT) Compra | (V ou CTRL) Venda";
 }
 
 bool ExistePosicaoOuOrdemPendente()
@@ -1133,7 +1154,7 @@ void ProcessarModificadoresDeArme()
    {
       // O modificador que armou a operação foi solto - desarma automaticamente.
       ApagarLinhasProjecao();
-      globalMensagemStatus = "(C ou SHIFT) Compra | (V ou CTRL) Venda";
+      AtualizarMensagemStatusOciosa();
    }
 }
 
@@ -1173,6 +1194,23 @@ double ObterVolumeMinimoNegociavel()
 
    double volumeMin = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
    return (volumeMin > 0.0) ? volumeMin : 1.0; // fallback de segurança
+}
+
+// Incremento "grande" (-10/+10, etc.) pro botão de "Papéis por operação": usa o valor FIXO
+// da config quando existir (ex.: GOLD11, cadastrado com entrada própria) - nesse caso não
+// olha mais nada, comportamento 100% igual ao de sempre. Só quando não há valor fixo (a
+// config genérica de Ações/ETF/FII, que cobre lote padrão E fracionário com a MESMA
+// entrada) é que decide na hora, olhando o símbolo do gráfico atual: se o volume mínimo
+// negociável for 1 (papel fracionário, "terminado em F" na prática), libera os botões
+// grandes também - sem isso, ações fracionárias nunca tinham como pular de 10 em 10.
+int ObterIncrementoGrandePapeis()
+{
+   if(cfgAtiva.incrementoGrandePapeis > 0) return cfgAtiva.incrementoGrandePapeis;
+
+   if(cfgAtiva.loteBaseadoEmVolumeMinimo && ObterVolumeMinimoNegociavel() <= 1.0)
+      return 10;
+
+   return 0;
 }
 
 // Lote Max FINAL da fase: o valor abstrato da tabela (1-10) direto pra WDO/WIN/CCM, ou
@@ -1939,7 +1977,7 @@ void FecharPosicaoAberta()
          slAlvoPosicaoAtual = 0.0;
          tpAlvoPosicaoAtual = 0.0;
          ultimaTentativaProtecaoMs = 0;
-         globalMensagemStatus = "(C ou SHIFT) Compra | (V ou CTRL) Venda";
+         AtualizarMensagemStatusOciosa();
          posicaoEstavaAberta = false;
       }
       return;
@@ -1955,7 +1993,7 @@ void FecharPosicaoAberta()
       return;
    }
 
-   globalMensagemStatus = "(C ou SHIFT) Compra | (V ou CTRL) Venda";
+   AtualizarMensagemStatusOciosa();
 }
 
 void CalcularMetricasDoDia()
@@ -2383,7 +2421,7 @@ void AtualizarPainelVisualEmTempoReal()
    {
       if(globalMensagemStatus.Find("Basta por hoje") >= 0 && !PositionSelect(_Symbol))
       {
-         globalMensagemStatus = "(C ou SHIFT) Compra | (V ou CTRL) Venda";
+         AtualizarMensagemStatusOciosa();
       }
    }
 
@@ -2445,7 +2483,7 @@ void AtualizarPainelVisualEmTempoReal()
          aguardandoSomSaida = true;
          tentativasSomSaida = 0;
          if(!algumLimiteAtingido)
-            globalMensagemStatus = "(C ou SHIFT) Compra | (V ou CTRL) Venda";
+            AtualizarMensagemStatusOciosa();
          posicaoEstavaAberta = false;
       }
       ObjectDelete(0, LABEL_PRECO_POSICAO);
@@ -2651,12 +2689,13 @@ void AtualizarPainelVisualEmTempoReal()
    CriarBotaoFase("Btn_PapelMais",  "+", 60,  GetLinhaY(4), 28, 16);
 
    // Botões extras de incremento grande (-10/+10, etc.) - só aparecem quando o ativo pede
-   // isso (cfgAtiva.incrementoGrandePapeis > 0, ex.: GOLD11). Ficam na mesma linha, mais
+   // isso (ObterIncrementoGrandePapeis() > 0, ex.: GOLD11 ou ações fracionárias). Ficam na mesma linha, mais
    // afastados do centro que os botões de +1/-1, que continuam exatamente onde estavam.
-   if(cfgAtiva.incrementoGrandePapeis > 0)
+   int incrementoGrande = ObterIncrementoGrandePapeis();
+   if(incrementoGrande > 0)
    {
-      string rotuloMenos = "-" + IntegerToString(cfgAtiva.incrementoGrandePapeis);
-      string rotuloMais  = "+" + IntegerToString(cfgAtiva.incrementoGrandePapeis);
+      string rotuloMenos = "-" + IntegerToString(incrementoGrande);
+      string rotuloMais  = "+" + IntegerToString(incrementoGrande);
       CriarBotaoFase("Btn_PapelMenosGrande", rotuloMenos, 149, GetLinhaY(4), 28, 16);
       CriarBotaoFase("Btn_PapelMaisGrande",  rotuloMais,  120, GetLinhaY(4), 28, 16);
    }
