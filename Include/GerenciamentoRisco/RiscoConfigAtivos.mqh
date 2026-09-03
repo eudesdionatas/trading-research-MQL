@@ -94,16 +94,16 @@ struct ConfigAtivo
 StructFase TabelaFasesWDO[11] =
 {
    { 0.0, 0.0,  0 },   // Índice 0 (Não usado)
-   { 3.0, -3.0,  1 },   // Fase 1
-   { 3.5, -3.5,  2 },   // Fase 2
-   { 4.5, -4.5,  3 },   // Fase 3
-   { 5.0, -4.5,  4 },   // Fase 4
-   { 5.5, -5.0,  5 },   // Fase 5
-   { 6.0, -5.5,  6 },   // Fase 6
-   { 6.5, -6.0,  7 },   // Fase 7
-   { 7.0, -6.0,  8 },   // Fase 8
-   { 7.5, -6.5,  9 },   // Fase 9
-   { 8.0, -7.0, 10 }    // Fase 10
+   { 2.5, -2.5,  1 },   // Fase 1
+   { 3.0, -3.0,  2 },   // Fase 2
+   { 3.5, -3.5,  3 },   // Fase 3
+   { 4.0, -3.5,  4 },   // Fase 4
+   { 4.5, -4.0,  5 },   // Fase 5
+   { 5.0, -4.5,  6 },   // Fase 6
+   { 5.5, -5.0,  7 },   // Fase 7
+   { 6.0, -5.0,  8 },   // Fase 8
+   { 6.5, -5.5,  9 },   // Fase 9
+   { 7.0, -6.0, 10 }    // Fase 10
 };
 
 //+------------------------------------------------------------------+
@@ -132,16 +132,16 @@ StructFase TabelaFasesWIN[11] =
 StructFase TabelaFasesCCM[11] =
 {
    {  0.0,  0.0,  0 },   // Índice 0 (Não usado)
-   {  7.0, -7.0,  1 },   // Fase 1
-   {  8.0, -8.0,  2 },   // Fase 2
-   {  9.0, -9.0,  3 },   // Fase 3
-   { 10.0, -9.0,  4 },   // Fase 4
-   { 11.0,-10.0,  5 },   // Fase 5
-   { 12.0,-11.0,  6 },   // Fase 6
-   { 13.0,-12.0,  7 },   // Fase 7
-   { 14.0,-12.0,  8 },   // Fase 8
-   { 15.0,-13.0,  9 },   // Fase 9
-   { 16.0,-14.0, 10 }    // Fase 10
+   {  5.0, -5.0,  1 },   // Fase 1
+   {  6.0, -6.0,  2 },   // Fase 2
+   {  7.0, -7.0,  3 },   // Fase 3
+   {  8.0, -7.0,  4 },   // Fase 4
+   {  9.0, -8.0,  5 },   // Fase 5
+   { 10.0, -9.0,  6 },   // Fase 6
+   { 11.0,-10.0,  7 },   // Fase 7
+   { 12.0,-10.0,  8 },   // Fase 8
+   { 13.0,-11.0,  9 },   // Fase 9
+   { 14.0,-12.0, 10 }    // Fase 10
 };
 
 //+------------------------------------------------------------------+
@@ -155,15 +155,15 @@ StructFase TabelaFasesAcoes[11] =
 {
    {  0.0,  0.0,  0 },   // Índice 0 (Não usado)
    { 10.0, -10.0,  1 },   // Fase 1
-   { 12.0, -12.0,  4 },   // Fase 2
-   { 14.0, -14.0,  7 },   // Fase 3
-   { 16.0, -14.0, 11 },   // Fase 4
-   { 18.0, -16.0, 15 },   // Fase 5
-   { 20.0, -18.0, 19 },   // Fase 6
-   { 22.0, -20.0, 23 },   // Fase 7
-   { 24.0, -20.0, 28 },   // Fase 8
-   { 26.0, -22.0, 32 },   // Fase 9
-   { 28.0, -24.0, 37 }    // Fase 10
+   { 12.0, -12.0,  3 },   // Fase 2
+   { 14.0, -14.0,  5 },   // Fase 3
+   { 16.0, -14.0,  7 },   // Fase 4
+   { 18.0, -16.0,  9 },   // Fase 5
+   { 20.0, -18.0, 11 },   // Fase 6
+   { 22.0, -20.0, 13 },   // Fase 7
+   { 24.0, -20.0, 15 },   // Fase 8
+   { 26.0, -22.0, 17 },   // Fase 9
+   { 28.0, -24.0, 19 }    // Fase 10
 };
 
 //+------------------------------------------------------------------+
@@ -176,16 +176,57 @@ StructFase TabelaFasesAcoes[11] =
 StructFase TabelaFasesGOLD11[11] =
 {
    {  0.0,  0.0,    0 },   // Índice 0 (Não usado)
-   { 10.0, -10.0,  300 },   // Fase 1
-   { 12.0, -12.0,  400 },   // Fase 2
-   { 14.0, -14.0,  500 },   // Fase 3
-   { 16.0, -14.0,  700 },   // Fase 4
+   { 10.0, -10.0,  500 },   // Fase 1
+   { 12.0, -12.0,  600 },   // Fase 2
+   { 14.0, -14.0,  700 },   // Fase 3
+   { 16.0, -14.0,  800 },   // Fase 4
    { 18.0, -16.0,  900 },   // Fase 5
-   { 20.0, -18.0, 1100 },   // Fase 6
-   { 22.0, -20.0, 1300 },   // Fase 7
-   { 24.0, -20.0, 1500 },   // Fase 8
-   { 26.0, -22.0, 1800 },   // Fase 9
-   { 28.0, -24.0, 2100 }    // Fase 10
+   { 20.0, -18.0, 1000 },   // Fase 6
+   { 22.0, -20.0, 1100 },   // Fase 7
+   { 24.0, -20.0, 1200 },   // Fase 8
+   { 26.0, -22.0, 1300 },   // Fase 9
+   { 28.0, -24.0, 1400 }    // Fase 10
+};
+
+//+------------------------------------------------------------------+
+//| Tabela de fases - BOVA11 (ETF Ibovespa)                           |
+//| Mesma estrutura de GOLD11 (ativo específico, R$/ponto fixo em     |
+//| 0,01, "Lote Max" já é a quantidade final de cotas) - só o Lote Max|
+//| por fase é diferente, calibrado pro preço/risco do BOVA11.        |
+//+------------------------------------------------------------------+
+StructFase TabelaFasesBOVA11[11] =
+{
+   {  0.0,  0.0,    0 },   // Índice 0 (Não usado)
+   { 16.0, -16.0,  70 },   // Fase 1
+   { 18.0, -18.0, 140 },   // Fase 2
+   { 20.0, -20.0, 210 },   // Fase 3
+   { 22.0, -20.0, 280 },   // Fase 4
+   { 24.0, -22.0, 350 },   // Fase 5
+   { 26.0, -24.0, 420 },   // Fase 6
+   { 28.0, -26.0, 490 },   // Fase 7
+   { 30.0, -26.0, 560 },   // Fase 8
+   { 32.0, -28.0, 610 },   // Fase 9
+   { 34.0, -30.0, 680 }    // Fase 10
+};
+
+//+------------------------------------------------------------------+
+//| Tabela de fases - SMAL11 (ETF Small Caps)                         |
+//| Mesma estrutura de GOLD11/BOVA11 - Lote Max calibrado pro preço/  |
+//| risco do SMAL11.                                                   |
+//+------------------------------------------------------------------+
+StructFase TabelaFasesSMAL11[11] =
+{
+   {  0.0,  0.0,    0 },   // Índice 0 (Não usado)
+   { 12.0, -12.0,  100 },   // Fase 1
+   { 14.0, -14.0,  200 },   // Fase 2
+   { 16.0, -16.0,  300 },   // Fase 3
+   { 18.0, -16.0,  400 },   // Fase 4
+   { 20.0, -18.0,  500 },   // Fase 5
+   { 22.0, -20.0,  600 },   // Fase 6
+   { 24.0, -22.0,  700 },   // Fase 7
+   { 26.0, -22.0,  800 },   // Fase 8
+   { 28.0, -24.0,  900 },   // Fase 9
+   { 30.0, -26.0, 1000 }    // Fase 10
 };
 
 //+------------------------------------------------------------------+
@@ -199,11 +240,13 @@ StructFase TabelaFasesGOLD11[11] =
 //+------------------------------------------------------------------+
 ConfigAtivo ConfigsDisponiveis[] =
 {
-   { "WDO - Minidólar",   "WDO",  {}, 10.00, CONV_DIRETA,           FORMULA_LOTE_MAX_FASE,   1, "pts",      DETECCAO_PREFIXO,     false, false, 0  },
-   { "WIN - Miniíndice",  "WIN",  {},  0.20, CONV_MULTIPLICA_POINT, FORMULA_PAPEIS_USUARIO,  0, "pts",      DETECCAO_PREFIXO,     false, false, 0  },
-   { "CCM - Milho",       "CCM",  {},  4.50, CONV_MULTIPLICA_POINT, FORMULA_LOTE_MAX_FASE,   1, "centavos", DETECCAO_PREFIXO,     false, false, 0  },
-   { "GOLD11 - ETF Ouro", "GOLD", {},  0.01, CONV_MULTIPLICA_POINT, FORMULA_LOTE_MAX_FASE,   1, "centavos", DETECCAO_PREFIXO,     false, false, 10 },
-   { "Ações/ETF/FII",     "",     {},  0.00, CONV_MULTIPLICA_POINT, FORMULA_LOTE_MAX_FASE,   1, "centavos", DETECCAO_SUFIXO_ACAO, true,  true,  0  }
+   { "WDO - Minidólar",     "WDO",  {}, 10.00, CONV_DIRETA,           FORMULA_LOTE_MAX_FASE,   1, "pts",      DETECCAO_PREFIXO,     false, false, 0  },
+   { "WIN - Miniíndice",    "WIN",  {},  0.20, CONV_MULTIPLICA_POINT, FORMULA_PAPEIS_USUARIO,  0, "pts",      DETECCAO_PREFIXO,     false, false, 0  },
+   { "CCM - Milho",         "CCM",  {},  4.50, CONV_MULTIPLICA_POINT, FORMULA_LOTE_MAX_FASE,   1, "centavos", DETECCAO_PREFIXO,     false, false, 0  },
+   { "GOLD11 - ETF Ouro",   "GOLD", {},  0.01, CONV_MULTIPLICA_POINT, FORMULA_LOTE_MAX_FASE,   1, "centavos", DETECCAO_PREFIXO,     false, false, 10 },
+   { "BOVA11 - ETF Ibov.",  "BOVA", {},  0.01, CONV_MULTIPLICA_POINT, FORMULA_LOTE_MAX_FASE,   1, "centavos", DETECCAO_PREFIXO,     false, false, 10 },
+   { "SMAL11 - ETF SmallCaps", "SMAL", {}, 0.01, CONV_MULTIPLICA_POINT, FORMULA_LOTE_MAX_FASE, 1, "centavos", DETECCAO_PREFIXO,     false, false, 10 },
+   { "Ações/ETF/FII",       "",     {},  0.00, CONV_MULTIPLICA_POINT, FORMULA_LOTE_MAX_FASE,   1, "centavos", DETECCAO_SUFIXO_ACAO, true,  true,  0  }
 };
 
 // Copia a tabela de fases correta para dentro de cada ConfigAtivo. Feito em uma função
@@ -216,7 +259,9 @@ void PrepararTabelasDosAtivos()
    ArrayCopy(ConfigsDisponiveis[1].tabelaFases, TabelaFasesWIN);
    ArrayCopy(ConfigsDisponiveis[2].tabelaFases, TabelaFasesCCM);
    ArrayCopy(ConfigsDisponiveis[3].tabelaFases, TabelaFasesGOLD11);
-   ArrayCopy(ConfigsDisponiveis[4].tabelaFases, TabelaFasesAcoes);
+   ArrayCopy(ConfigsDisponiveis[4].tabelaFases, TabelaFasesBOVA11);
+   ArrayCopy(ConfigsDisponiveis[5].tabelaFases, TabelaFasesSMAL11);
+   ArrayCopy(ConfigsDisponiveis[6].tabelaFases, TabelaFasesAcoes);
 }
 
 // Reconhece um ticker de ação/ETF/FII pelo PADRÃO do nome, não por lista fechada de
